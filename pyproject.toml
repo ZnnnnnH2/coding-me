@@ -1,0 +1,37 @@
+[project]
+name = "codeingme"
+version = "0.1.0"
+description = "State-machine-driven web app agent framework prototype"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.135.3",
+    "httpx>=0.28.1",
+    "socksio>=1.0.0",
+    "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+codeingme = "codeingme.cli:main"
+codeingme-studio = "codeingme.studio:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

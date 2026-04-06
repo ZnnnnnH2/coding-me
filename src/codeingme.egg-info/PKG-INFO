@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: codeingme
+Version: 0.1.0
+Summary: State-machine-driven web app agent framework prototype
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.135.3
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: socksio>=1.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+
+# codeingme
+
+A Python-first prototype of a state-machine-driven Web App Agent framework.
