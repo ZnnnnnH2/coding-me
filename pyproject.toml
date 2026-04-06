@@ -1,7 +1,7 @@
 [project]
 name = "codeingme"
 version = "0.1.0"
-description = "State-machine-driven web app agent framework prototype"
+description = "Specification-driven, test-first backend module generation prototype"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

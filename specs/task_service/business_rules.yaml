@@ -1,0 +1,4 @@
+rules:
+  - Tasks must expose their completion state through the API response.
+  - Completing an unknown task must return a client-visible error.
+  - Task listing must remain available after completion updates.

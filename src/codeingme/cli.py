@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
 from .llm import RelayLLMClient
 from .orchestrator.engine import CodeingmeOrchestrator
+from .spec_parser import SpecificationBundle, load_spec_bundle
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +46,19 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             client.close()
         return 0
+    if args and args[0] == "spec-summary":
+        bundle = load_spec_bundle(_require_argument(args, "spec-summary"))
+        print(json.dumps(bundle.to_dict(), indent=2, ensure_ascii=False))
+        return 0
+    if args and args[0] == "run-spec":
+        bundle = load_spec_bundle(_require_argument(args, "run-spec"))
+        _print_spec_run(bundle)
+        return 0
+    if args and args[0] == "demo":
+        case_name = args[1] if len(args) > 1 else "task_service"
+        bundle = load_spec_bundle(_default_spec_root() / case_name)
+        _print_spec_run(bundle)
+        return 0
 
     requirement = " ".join(args) if args else "Build a todo web app with task creation and listing"
     result = CodeingmeOrchestrator().run(requirement)
@@ -58,3 +73,20 @@ def _require_llm_client() -> RelayLLMClient:
             "Missing LLM credentials. Set CODEINGME_LLM_API_KEY or OPENAI_API_KEY first."
         )
     return client
+
+
+def _print_spec_run(bundle: SpecificationBundle) -> None:
+    result = CodeingmeOrchestrator().run(bundle.requirement_prompt())
+    payload = asdict(result)
+    payload["spec_bundle"] = bundle.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _require_argument(args: list[str], command: str) -> str:
+    if len(args) < 2:
+        raise SystemExit(f"Usage: codeingme {command} <spec-dir>")
+    return args[1]
+
+
+def _default_spec_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "specs"

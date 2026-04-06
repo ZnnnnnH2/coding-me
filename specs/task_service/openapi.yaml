@@ -1,0 +1,14 @@
+openapi: 3.1.0
+info:
+  title: Task Service API
+  version: 0.1.0
+  description: Manage task records with completion state and contract-focused verification.
+paths:
+  /api/tasks:
+    get:
+      summary: List all tasks
+    post:
+      summary: Create a task
+  /api/tasks/{task_id}/complete:
+    patch:
+      summary: Mark a task as complete

@@ -1,0 +1,4 @@
+rules:
+  - Orders must reject non-positive quantities.
+  - Orders may move from pending to confirmed or cancelled only.
+  - Order detail retrieval must expose the latest status.

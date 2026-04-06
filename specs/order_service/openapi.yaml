@@ -1,0 +1,17 @@
+openapi: 3.1.0
+info:
+  title: Order Service API
+  version: 0.1.0
+  description: Manage purchase orders with inventory validation and status transitions.
+paths:
+  /api/orders:
+    get:
+      summary: List orders
+    post:
+      summary: Create an order
+  /api/orders/{order_id}:
+    get:
+      summary: Fetch order details
+  /api/orders/{order_id}/status:
+    patch:
+      summary: Update order status
