@@ -60,7 +60,7 @@ class BaseAgent:
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-    ) -> tuple[LLMCompletion | None, dict[str, str]]:
+    ) -> tuple[LLMCompletion | None, dict[str, object]]:
         if context.llm_client is None:
             return None, {}
         try:
@@ -87,55 +87,99 @@ class BaseAgent:
         required_files: dict[str, str],
         collection_fields: list[str],
         validator: Callable[[StructuredGenerationBundle], bool] | None = None,
-    ) -> tuple[StructuredGenerationBundle | None, dict[str, str]]:
-        completion, metadata = self._llm_completion(
-            context,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=max_tokens,
-        )
-        if completion is None:
-            return None, metadata
+    ) -> tuple[StructuredGenerationBundle | None, dict[str, object]]:
+        if context.llm_client is None:
+            return None, {}
 
-        payload = self._extract_json_object(completion.content)
+        current_user_prompt = user_prompt
+        attempt_records: list[dict[str, object]] = []
+        last_metadata: dict[str, object] = {}
+        for attempt in range(2):
+            completion, metadata = self._llm_completion(
+                context,
+                system_prompt=system_prompt,
+                user_prompt=current_user_prompt,
+                max_tokens=max_tokens,
+            )
+            metadata["llm_attempts"] = str(attempt + 1)
+            attempt_record: dict[str, object] = {
+                "attempt": attempt + 1,
+                "kind": "retry" if attempt > 0 else "initial",
+                "model": metadata.get("llm_model"),
+                "cached": metadata.get("llm_cached") == "true",
+                "success": False,
+            }
+            if completion is None:
+                attempt_record["error"] = metadata.get("llm_error")
+                attempt_record["success"] = False
+                attempt_records.append(attempt_record)
+                last_metadata = metadata
+            else:
+                bundle, error = self._parse_structured_bundle(
+                    completion.content,
+                    required_files=required_files,
+                    collection_fields=collection_fields,
+                    validator=validator,
+                )
+                if bundle is not None:
+                    if bundle.summary and bundle.summary.strip():
+                        metadata["llm_summary"] = bundle.summary.strip()
+                    metadata["llm_response_format"] = "json-files"
+                    attempt_record["success"] = True
+                    attempt_record["response_format"] = "json-files"
+                    attempt_records.append(attempt_record)
+                    metadata["llm_attempt_records"] = attempt_records
+                    return bundle, metadata
+                metadata["llm_error"] = error
+                metadata["llm_fallback"] = "true"
+                attempt_record["error"] = error
+                attempt_record["success"] = False
+                attempt_records.append(attempt_record)
+                last_metadata = metadata
+
+            if attempt == 0:
+                current_user_prompt = self._retry_user_prompt(user_prompt, last_metadata.get("llm_error", "Unknown generation failure"))
+
+        last_metadata["llm_attempt_records"] = attempt_records
+        return None, last_metadata
+
+    def _parse_structured_bundle(
+        self,
+        content: str,
+        *,
+        required_files: dict[str, str],
+        collection_fields: list[str],
+        validator: Callable[[StructuredGenerationBundle], bool] | None = None,
+    ) -> tuple[StructuredGenerationBundle | None, str]:
+        payload = self._extract_json_object(content)
         if payload is None:
-            metadata["llm_error"] = "Model did not return a valid JSON object"
-            metadata["llm_fallback"] = "true"
-            return None, metadata
+            return None, "Model did not return a valid JSON object"
 
         files_data = payload.get("files")
         if not isinstance(files_data, list) or not files_data:
-            metadata["llm_error"] = "Model JSON response is missing a non-empty files list"
-            metadata["llm_fallback"] = "true"
-            return None, metadata
+            return None, "Model JSON response is missing a non-empty files list"
 
         files: list[GeneratedFileArtifact] = []
         for item in files_data:
             if not isinstance(item, dict):
-                metadata["llm_error"] = "Model JSON files list must contain objects"
-                metadata["llm_fallback"] = "true"
-                return None, metadata
+                return None, "Model JSON files list must contain objects"
 
             path = item.get("path")
             raw_content = item.get("content")
             language = item.get("language")
             if not isinstance(path, str) or not path.strip():
-                metadata["llm_error"] = "Generated file entry is missing a valid path"
-                metadata["llm_fallback"] = "true"
-                return None, metadata
-            if not isinstance(raw_content, str) or not raw_content.strip():
-                metadata["llm_error"] = "Generated file entry is missing non-empty content"
-                metadata["llm_fallback"] = "true"
-                return None, metadata
-
+                return None, "Generated file entry is missing a valid path"
             normalized_path = path.strip()
+            if not isinstance(raw_content, str) or not raw_content.strip():
+                if normalized_path not in required_files:
+                    continue
+                return None, "Generated file entry is missing non-empty content"
+
             expected_language = required_files.get(normalized_path)
             normalized_language = language.strip() if isinstance(language, str) and language.strip() else None
             content = self._extract_code_block(raw_content, language=normalized_language or expected_language)
             if not content.strip():
-                metadata["llm_error"] = "Generated file content was empty after extraction"
-                metadata["llm_fallback"] = "true"
-                return None, metadata
+                return None, "Generated file content was empty after extraction"
             files.append(
                 GeneratedFileArtifact(
                     path=normalized_path,
@@ -146,9 +190,7 @@ class BaseAgent:
 
         missing = sorted(path for path in required_files if self._file_from_list(files, path) is None)
         if missing:
-            metadata["llm_error"] = f"Model JSON response is missing required files: {', '.join(missing)}"
-            metadata["llm_fallback"] = "true"
-            return None, metadata
+            return None, f"Model JSON response is missing required files: {', '.join(missing)}"
 
         collections: dict[str, list[str]] = {}
         for field_name in collection_fields:
@@ -156,9 +198,7 @@ class BaseAgent:
             if raw_items is None:
                 raw_items = []
             if not isinstance(raw_items, list) or any(not isinstance(item, str) for item in raw_items):
-                metadata["llm_error"] = f"Model JSON field {field_name} must be a list of strings"
-                metadata["llm_fallback"] = "true"
-                return None, metadata
+                return None, f"Model JSON field {field_name} must be a list of strings"
             collections[field_name] = [item.strip() for item in raw_items if item.strip()]
 
         bundle = StructuredGenerationBundle(
@@ -168,14 +208,24 @@ class BaseAgent:
             raw=payload,
         )
         if validator is not None and not validator(bundle):
-            metadata["llm_error"] = "Generated structured response failed validation"
-            metadata["llm_fallback"] = "true"
-            return None, metadata
+            return None, "Generated structured response failed validation"
+        return bundle, ""
 
-        if bundle.summary and bundle.summary.strip():
-            metadata["llm_summary"] = bundle.summary.strip()
-        metadata["llm_response_format"] = "json-files"
-        return bundle, metadata
+    @staticmethod
+    def _retry_user_prompt(user_prompt: str, error: str) -> str:
+        extra_retry_note = ""
+        if "timed out" in error.lower() or "timeout" in error.lower():
+            extra_retry_note = "- Make the response significantly more compact than the previous attempt.\n"
+        return (
+            f"{user_prompt}\n"
+            "Retry requirements:\n"
+            f"- Previous attempt failed with: {error}.\n"
+            "- Return one corrected JSON object only.\n"
+            "- Keep every required file entry present with non-empty content.\n"
+            "- Satisfy every stated constraint exactly.\n"
+            f"{extra_retry_note}"
+            "- Do not include any prose before or after the JSON object."
+        )
 
     @staticmethod
     def _file_from_list(files: list[GeneratedFileArtifact], path: str) -> GeneratedFileArtifact | None:

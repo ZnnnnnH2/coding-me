@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 
 from codeingme.agents import AgentContext
 from codeingme.agents.backend import BackendAgent
-from codeingme.agents.frontend import FrontendAgent
 from codeingme.agents.qa import QAAgent
 from codeingme.demo_app import DemoAppBlueprint
 from codeingme.orchestrator import CodeingmeOrchestrator
@@ -56,15 +55,6 @@ class _RecordingBackendAgent(BackendAgent):
 
 
 @dataclass
-class _RecordingFrontendAgent(FrontendAgent):
-    contexts: list[set[str]] = field(default_factory=list)
-
-    def run(self, context: AgentContext):
-        self.contexts.append(context.graph_slice.node_ids())
-        return super().run(context)
-
-
-@dataclass
 class _RecordingQAAgent(QAAgent):
     contexts: list[set[str]] = field(default_factory=list)
 
@@ -77,31 +67,48 @@ def test_orchestrator_executes_cascade_batches_with_sliced_contexts(tmp_path) ->
     blueprint = DemoAppBlueprint()
     orchestrator = CodeingmeOrchestrator(workspace_root=tmp_path)
     backend = _RecordingBackendAgent()
-    frontend = _RecordingFrontendAgent()
     qa = _RecordingQAAgent()
     orchestrator.backend = backend
-    orchestrator.frontend = frontend
     orchestrator.qa = qa
 
     result = orchestrator.run(blueprint.requirement_prompt())
 
     assert result.final_state == "done"
     assert len(backend.contexts) == 3
-    assert len(frontend.contexts) == 2
     assert len(qa.contexts) == 2
     assert {"schema:task", "api:get:/api/tasks"} in backend.contexts
     assert {
         "schema:task",
         "api:get:/api/tasks",
         "demo_app/tasks_api.py::class:TaskService",
-        "demo_app/tasks_api.py::function:list_tasks",
+        "demo_app/tasks_api.py::function:list_items",
     } in backend.contexts
-    assert frontend.contexts[-1] == {"schema:task", "ui:task_list", "api:get:/api/tasks"}
     assert qa.contexts[-1] == {
         "schema:task",
         "api:get:/api/tasks",
         "tests_generated/test_tasks_demo.py::function:_get_json",
-        "tests_generated/test_tasks_demo.py::function:_get_text",
-        "tests_generated/test_tasks_demo.py::function:test_tasks_contract",
-        "tests_generated/test_tasks_demo.py::function:test_tasks_e2e",
+        "tests_generated/test_tasks_demo.py::function:test_task_contract",
+        "tests_generated/test_tasks_demo.py::function:test_task_visibility_rules",
     }
+
+
+def test_orchestrator_emits_progress_events(tmp_path) -> None:
+    blueprint = DemoAppBlueprint()
+    orchestrator = CodeingmeOrchestrator(workspace_root=tmp_path)
+    events = []
+
+    result = orchestrator.run(blueprint.requirement_prompt(), event_callback=events.append)
+
+    assert result.final_state == "done"
+    assert any(event.stage == "state" and event.state == "contract_generation" for event in events)
+    assert any(
+        event.stage == "agent" and event.role == "backend" and event.status == "completed"
+        for event in events
+    )
+    assert any(event.stage == "cascade_batch" and event.status == "completed" for event in events)
+    assert any(
+        event.stage == "tests" and event.status == "completed" and event.state == "verification"
+        for event in events
+    )
+    assert events[-1].stage == "state"
+    assert events[-1].state == "done"

@@ -104,7 +104,7 @@ class ArchitectAgent(BaseAgent):
         completion, llm_artifacts = self._llm_completion(
             context,
             system_prompt=(
-                "You are the architect agent inside a state-machine-driven web app generator. "
+                "You are the architect agent inside a state-machine-driven backend module generator. "
                 "Return a JSON object with keys summary, design_note, schemas, apis, and risks."
             ),
             user_prompt=(

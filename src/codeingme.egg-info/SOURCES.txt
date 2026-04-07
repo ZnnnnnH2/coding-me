@@ -1,7 +1,11 @@
 README.md
 pyproject.toml
 src/codeingme/__init__.py
+src/codeingme/__main__.py
 src/codeingme/cli.py
+src/codeingme/env.py
+src/codeingme/generation_plan.py
+src/codeingme/studio.py
 src/codeingme.egg-info/PKG-INFO
 src/codeingme.egg-info/SOURCES.txt
 src/codeingme.egg-info/dependency_links.txt
@@ -14,6 +18,7 @@ src/codeingme/agents/backend.py
 src/codeingme/agents/base.py
 src/codeingme/agents/devops.py
 src/codeingme/agents/frontend.py
+src/codeingme/agents/naming.py
 src/codeingme/agents/qa.py
 src/codeingme/ast_pipeline/__init__.py
 src/codeingme/ast_pipeline/extractors.py
@@ -42,3 +47,5 @@ src/codeingme/runtime/__init__.py
 src/codeingme/runtime/executor.py
 src/codeingme/runtime/patches.py
 src/codeingme/runtime/rollback.py
+src/codeingme/spec_parser/__init__.py
+src/codeingme/spec_parser/spec_bundle.py

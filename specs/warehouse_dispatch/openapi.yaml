@@ -1,0 +1,9 @@
+openapi: 3.1.0
+info:
+  title: Warehouse Dispatch Queue API
+  version: 0.1.0
+  description: List warehouse dispatch tasks with visible completion state for shift handoff.
+paths:
+  /api/warehouse-dispatch-tasks:
+    get:
+      summary: List warehouse dispatch tasks

@@ -4,6 +4,7 @@ import ast
 import re
 
 from codeingme.agents.base import AgentContext, AgentResult, BaseAgent, StructuredGenerationBundle
+from codeingme.agents.naming import generation_plan
 from codeingme.runtime import FilePatch, FilePatchPlan
 
 
@@ -11,10 +12,11 @@ class BackendAgent(BaseAgent):
     role = "backend"
 
     def run(self, context: AgentContext) -> AgentResult:
+        plan = generation_plan(context)
         api_route = self._api_route(context)
         backend_source = self._default_backend_source(context)
         artifacts: dict[str, object] = {
-            "service": f"demo_app/tasks_api.py::class:{self._service_class_name(context)}",
+            "service": f"{plan.backend_module_path}::class:{self._service_class_name(context)}",
             "route": self._api_node_id(context),
             "generation_mode": "template",
         }
@@ -31,31 +33,35 @@ class BackendAgent(BaseAgent):
                 f"APIs: {self._api_summary(context)}\n"
                 "Response format:\n"
                 "- Return JSON only.\n"
-                '- Include a files array with one object for path "demo_app/tasks_api.py".\n'
+                f'- Include a files array with one object for path "{plan.backend_module_path}".\n'
                 '- Each file object must use keys path, language, and content.\n'
                 '- The content value may be a plain Python string or a ```python fenced block.\n'
-                f'- Include routes as a list like ["GET {api_route}", "GET /"].\n'
+                f'- Include routes as a list like ["GET {api_route}"].\n'
                 '- Include imports as a list of import identifiers.\n'
                 '- Include risks as a list of short risk notes.\n'
                 "Constraints:\n"
                 "- Use FastAPI.\n"
-                "- Implement in-memory task storage behind a service class whose name ends with Service and exposes list_tasks().\n"
+                "- Implement in-memory list-oriented storage behind a service class whose name ends with Service and exposes a list_... method.\n"
                 '- Expose a module-level variable named app.\n'
-                f'- Implement GET {api_route} returning {{"tasks": [...]}}.\n'
-                "- Include two in-memory tasks with id, title, and completed fields.\n"
-                "- Let the sample task titles, app title, and route copy reflect the requirement domain rather than defaulting to a generic tasks demo.\n"
-                '- Implement GET / returning HTMLResponse by loading demo_app/static/task_list.html.\n'
-                '- Replace the {{TASK_ITEMS}} placeholder with rendered <li> rows.\n'
+                f'- Implement GET {api_route} returning {{"{plan.response_key}": [...]}}.\n'
+                "- Include two in-memory records with id, title, and completed fields.\n"
+                "- Let the sample titles, app title, and route copy reflect the requirement domain rather than defaulting to a generic demo.\n"
+                "- Keep the module backend-only. Do not add HTML routes, templates, or frontend assets.\n"
                 "- Do not include any prose outside the JSON object."
             ),
             max_tokens=1100,
-            required_files={"demo_app/tasks_api.py": "python"},
+            required_files={plan.backend_module_path: "python"},
             collection_fields=["routes", "imports", "risks"],
-            validator=lambda bundle: self._is_valid_backend_bundle(bundle, api_route=api_route),
+            validator=lambda bundle: self._is_valid_backend_bundle(
+                bundle,
+                backend_module_path=plan.backend_module_path,
+                api_route=api_route,
+                response_key=plan.response_key,
+            ),
         )
         artifacts.update(llm_artifacts)
         if bundle is not None:
-            llm_source = self._file_content(bundle, "demo_app/tasks_api.py")
+            llm_source = self._file_content(bundle, plan.backend_module_path)
             if llm_source is not None:
                 backend_source = llm_source
             artifacts["routes"] = bundle.collections["routes"] or self._infer_routes(llm_source or "")
@@ -65,65 +71,71 @@ class BackendAgent(BaseAgent):
 
         return AgentResult(
             role=self.role,
-            summary="Generated a FastAPI task backend with API and HTML entrypoint",
+            summary="Generated a FastAPI backend module with API contract coverage",
             artifacts=artifacts,
             file_plan=FilePatchPlan(
                 name="backend_demo",
                 patches=[
-                    FilePatch(path="demo_app/__init__.py", content="from .tasks_api import app\n"),
-                    FilePatch(path="demo_app/tasks_api.py", content=backend_source),
+                    FilePatch(
+                        path=plan.backend_package_init_path,
+                        content=f"from .{self._module_name(plan.backend_module_path)} import app\n",
+                    ),
+                    FilePatch(path=plan.backend_module_path, content=backend_source),
                 ],
             ),
         )
 
     def _default_backend_source(self, context: AgentContext) -> str:
+        plan = generation_plan(context)
         service_class_name = self._service_class_name(context)
         service_var_name = self._service_var_name(context)
         api_route = self._api_route(context)
         app_title = self._app_title(context)
-        task_titles = self._sample_task_titles(context)
+        item_titles = self._sample_item_titles(context)
+        list_method_name = self._list_method_name(context)
+        schema_name = self._primary_schema_name(context)
         return f"""from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 app = FastAPI(title="{self._python_string(app_title)}")
 
+class {schema_name}(BaseModel):
+    id: int
+    title: str
+    completed: bool
+
+
 class {service_class_name}:
     def __init__(self) -> None:
-        self._tasks = [
-            {{"id": 1, "title": "{self._python_string(task_titles[0])}", "completed": True}},
-            {{"id": 2, "title": "{self._python_string(task_titles[1])}", "completed": False}},
+        self._items = [
+            {schema_name}(
+                id=1,
+                title="{self._python_string(item_titles[0])}",
+                completed=False,
+            ),
+            {schema_name}(
+                id=2,
+                title="{self._python_string(item_titles[1])}",
+                completed=True,
+            ),
         ]
 
-    def list_tasks(self) -> list[dict[str, object]]:
-        return list(self._tasks)
+    def {list_method_name}(self) -> list[{schema_name}]:
+        return list(self._items)
 
 
 {service_var_name} = {service_class_name}()
 
-def _render_task_list() -> str:
-    template_path = Path(__file__).with_name("static").joinpath("task_list.html")
-    template = template_path.read_text(encoding="utf-8")
-    items: list[str] = []
-    for task in {service_var_name}.list_tasks():
-        status = "done" if task["completed"] else "todo"
-        items.append(
-            f'<li data-completed="{{str(task["completed"]).lower()}}">{{task["title"]}} ({{status}})</li>'
-        )
-    return template.replace("{{{{TASK_ITEMS}}}}", "\\n".join(items))
-
 
 @app.get("{api_route}")
-async def list_tasks() -> dict[str, list[dict[str, object]]]:
-    return {{"tasks": {service_var_name}.list_tasks()}}
-
-
-@app.get("/", response_class=HTMLResponse)
-async def task_list() -> HTMLResponse:
-    return HTMLResponse(_render_task_list())
+async def list_items() -> dict[str, list[dict[str, object]]]:
+    return {{
+        "{plan.response_key}": [
+            item.model_dump() for item in {service_var_name}.{list_method_name}()
+        ]
+    }}
 """
 
     def _schema_summary(self, context: AgentContext) -> str:
@@ -139,15 +151,20 @@ async def task_list() -> HTMLResponse:
             return "none"
         return "; ".join(f"{api.method} {api.route}" for api in context.apis)
 
-    def _is_valid_backend_bundle(self, bundle: StructuredGenerationBundle, *, api_route: str) -> bool:
-        content = self._file_content(bundle, "demo_app/tasks_api.py")
-        if content is None or not self._is_python_file("demo_app/tasks_api.py", content):
+    def _is_valid_backend_bundle(
+        self,
+        bundle: StructuredGenerationBundle,
+        *,
+        backend_module_path: str,
+        api_route: str,
+        response_key: str,
+    ) -> bool:
+        content = self._file_content(bundle, backend_module_path)
+        if content is None or not self._is_python_file(backend_module_path, content):
             return False
         try:
             module = ast.parse(content)
         except SyntaxError:
-            return False
-        if "{{TASK_ITEMS}}" not in content:
             return False
         if not self._has_fastapi_app(module):
             return False
@@ -155,18 +172,17 @@ async def task_list() -> HTMLResponse:
             return False
         route_map = self._route_functions(module)
         api_handler = route_map.get(("get", api_route))
-        home_handler = route_map.get(("get", "/"))
-        if api_handler is None or home_handler is None:
+        if api_handler is None:
             return False
-        if not self._returns_tasks_payload(api_handler):
+        if not self._returns_payload(api_handler, response_key):
             return False
-        if not self._returns_html_response(home_handler):
+        if ("get", "/") in route_map:
             return False
         routes = bundle.collections.get("routes", [])
-        if routes and not self._has_items(routes, [f"GET {api_route}", "GET /"]):
+        if routes and routes != [f"GET {api_route}"]:
             return False
-        imports = bundle.collections.get("imports", [])
-        return not imports or any("fastapi" in item.lower() for item in imports)
+        imports = [item.lower() for item in bundle.collections.get("imports", [])]
+        return not imports or any("fastapi" in item for item in imports)
 
     def _has_fastapi_app(self, module: ast.Module) -> bool:
         for node in module.body:
@@ -189,7 +205,10 @@ async def task_list() -> HTMLResponse:
                 continue
             if not node.name.endswith("Service"):
                 continue
-            if any(isinstance(item, ast.FunctionDef) and item.name == "list_tasks" for item in node.body):
+            if any(
+                isinstance(item, ast.FunctionDef) and item.name.startswith("list_")
+                for item in node.body
+            ):
                 return True
         return False
 
@@ -212,7 +231,7 @@ async def task_list() -> HTMLResponse:
                 routes[(method, path)] = node
         return routes
 
-    def _returns_tasks_payload(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    def _returns_payload(self, node: ast.FunctionDef | ast.AsyncFunctionDef, response_key: str) -> bool:
         for candidate in ast.walk(node):
             if not isinstance(candidate, ast.Return):
                 continue
@@ -220,24 +239,8 @@ async def task_list() -> HTMLResponse:
             if not isinstance(value, ast.Dict):
                 continue
             for key in value.keys:
-                if isinstance(key, ast.Constant) and key.value == "tasks":
+                if isinstance(key, ast.Constant) and key.value == response_key:
                     return True
-        return False
-
-    def _returns_html_response(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-        for decorator in node.decorator_list:
-            if not isinstance(decorator, ast.Call):
-                continue
-            for keyword in decorator.keywords:
-                if keyword.arg != "response_class":
-                    continue
-                if isinstance(keyword.value, ast.Name) and keyword.value.id == "HTMLResponse":
-                    return True
-        for candidate in ast.walk(node):
-            if not isinstance(candidate, ast.Call):
-                continue
-            if isinstance(candidate.func, ast.Name) and candidate.func.id == "HTMLResponse":
-                return True
         return False
 
     def _infer_routes(self, content: str) -> list[str]:
@@ -280,21 +283,31 @@ async def task_list() -> HTMLResponse:
     def _service_var_name(self, context: AgentContext) -> str:
         parts = re.findall(r"[A-Z]?[a-z0-9]+", self._service_class_name(context))
         if not parts:
-            return "task_service"
+            return "service"
         return "_".join(part.lower() for part in parts)
 
     def _api_node_id(self, context: AgentContext) -> str:
         return f"api:get:{self._api_route(context)}"
 
     def _app_title(self, context: AgentContext) -> str:
-        return f"{self._humanize_identifier(self._primary_schema_name(context))} Board"
+        return f"{self._humanize_identifier(self._primary_schema_name(context))} API"
 
-    def _sample_task_titles(self, context: AgentContext) -> list[str]:
+    def _sample_item_titles(self, context: AgentContext) -> list[str]:
         label = self._humanize_identifier(self._primary_schema_name(context)).lower()
         return [
             f"Review {label} queue",
             f"Confirm {label} completion state",
         ]
+
+    def _list_method_name(self, context: AgentContext) -> str:
+        plan = generation_plan(context)
+        return f"list_{plan.response_key}"
+
+    def _module_name(self, path: str) -> str:
+        return self._basename(path).removesuffix(".py")
+
+    def _basename(self, path: str) -> str:
+        return path.rsplit("/", 1)[-1]
 
     def _humanize_identifier(self, value: str) -> str:
         parts = re.findall(r"[A-Z]?[a-z0-9]+", value)

@@ -14,7 +14,7 @@ The target problem is not full-stack app generation. It is specification-explici
 2. Summarize endpoints, tables, and rules into a controlled requirement prompt.
 3. Enter the state-machine orchestrator.
 4. Generate red tests before implementation.
-5. Implement the backend, frontend stub, and runtime support.
+5. Implement the backend and runtime support.
 6. Synchronize generated code into the dependency graph.
 7. Use cascade planning and targeted verification to validate the result.
 8. Roll back on failure and preserve checkpoints for repair.

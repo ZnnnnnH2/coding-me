@@ -3,5 +3,6 @@
 .codex
 .venv/
 .pytest_cache/
+.pytest-tmp/
 __pycache__/
 *.py[cod]

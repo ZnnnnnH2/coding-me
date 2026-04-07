@@ -46,14 +46,14 @@ def test_demo_flow_reaches_done_state(tmp_path) -> None:
 
     assert result.final_state == "done"
     assert "schema:task" in result.graph_nodes
-    assert "ui:task_list" in result.blast_radius
+    assert "api:get:/api/tasks" in result.blast_radius
     assert "schema:task" in result.cascade_order
     assert result.cascade_batches[0] == ["schema:task"]
     assert result.cascade_tasks[0].node_id == "schema:task"
     assert result.cascade_tasks[0].role == "backend"
     assert "demo_app/tasks_api.py::class:TaskService" in result.graph_nodes
-    assert "demo_app/tasks_api.py::function:list_tasks" in result.graph_nodes
-    assert "demo_app/tasks_api.py::function:list_tasks" in result.graph_sync_added
+    assert "demo_app/tasks_api.py::function:list_items" in result.graph_nodes
+    assert "demo_app/tasks_api.py::function:list_items" in result.graph_sync_added
     assert "api:get:/api/tasks" in result.context_slice_nodes
     assert "ModuleNotFoundError" in result.red_test_output
     assert "2 passed" in result.verification_output
@@ -73,7 +73,6 @@ def test_demo_flow_rolls_back_failed_implementation(tmp_path) -> None:
 
     assert not (tmp_path / "demo_app" / "tasks_api.py").exists()
     assert not (tmp_path / "demo_app" / "__init__.py").exists()
-    assert not (tmp_path / "demo_app" / "static" / "task_list.html").exists()
     assert not (tmp_path / "Dockerfile").exists()
     assert not (tmp_path / "docker-compose.yml").exists()
     assert (tmp_path / "tests_generated" / "test_tasks_demo.py").exists()
@@ -103,12 +102,16 @@ def test_demo_flow_compacts_existing_backend_write_into_diff(tmp_path) -> None:
 
 
 def test_demo_flow_supports_requirement_specific_bootstrap_specs(tmp_path) -> None:
-    requirement = "Build a warehouse dispatch tasks web app with listing and completion state"
+    requirement = "Build a warehouse dispatch tasks backend module with listing and completion state"
 
     result = CodeingmeOrchestrator(workspace_root=tmp_path).run(requirement)
 
-    backend_source = (tmp_path / "demo_app" / "tasks_api.py").read_text(encoding="utf-8")
-    qa_source = (tmp_path / "tests_generated" / "test_tasks_demo.py").read_text(encoding="utf-8")
+    backend_source = (
+        tmp_path / "demo_app" / "warehouse_dispatch_tasks_api.py"
+    ).read_text(encoding="utf-8")
+    qa_source = (
+        tmp_path / "tests_generated" / "test_warehouse_dispatch_tasks_demo.py"
+    ).read_text(encoding="utf-8")
 
     assert result.final_state == "done"
     assert "schema:warehousedispatchtask" in result.graph_nodes
@@ -117,3 +120,4 @@ def test_demo_flow_supports_requirement_specific_bootstrap_specs(tmp_path) -> No
     assert "api:get:/api/warehouse-dispatch-tasks" in result.context_slice_nodes
     assert '@app.get("/api/warehouse-dispatch-tasks")' in backend_source
     assert '_get_json("/api/warehouse-dispatch-tasks")' in qa_source
+    assert 'payload["warehouse_dispatch_tasks"]' in qa_source

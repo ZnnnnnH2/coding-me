@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 
 from codeingme.agents.base import AgentContext, AgentResult, BaseAgent, StructuredGenerationBundle
+from codeingme.agents.naming import generation_plan
 from codeingme.contracts import TestSpec
 from codeingme.runtime import FilePatch, FilePatchPlan
 
@@ -11,8 +12,9 @@ class QAAgent(BaseAgent):
     role = "qa"
 
     def run(self, context: AgentContext, tests: list[TestSpec] | None = None) -> AgentResult:
+        plan = generation_plan(context)
         resolved_tests = tests or []
-        test_path = resolved_tests[0].path if resolved_tests else "tests_generated/test_tasks_demo.py"
+        test_path = resolved_tests[0].path if resolved_tests else plan.test_module_path
         api_route = self._api_route(context)
         test_source = self._default_test_source(context)
         artifacts: dict[str, object] = {"test_file": test_path, "generation_mode": "template"}
@@ -35,20 +37,25 @@ class QAAgent(BaseAgent):
                 '- Include tests as a list of test function names.\n'
                 '- Include risks as a list of short risk notes.\n'
                 "Constraints:\n"
-                "- Import app from demo_app.tasks_api.\n"
+                f"- Import app from demo_app.{self._backend_module_name(context)}.\n"
                 "- Exercise the ASGI app in-process without real network I/O.\n"
                 f"- Add one contract test for GET {api_route}.\n"
-                "- Add one end-to-end test for GET / that checks rendered task content.\n"
+                "- Add one business-rule test that proves completed and open items both remain visible in the API payload.\n"
                 "- Use meaningful pytest test names and return them in the tests list.\n"
-                f"- Treat GET {api_route} as returning an object with a top-level tasks list, not a bare array.\n"
-                "- Do not hardcode example task titles; derive UI assertions from the API response.\n"
-                "- Keep the tests valid for any non-empty tasks list that uses id, title, and completed fields.\n"
+                f"- Treat GET {api_route} as returning an object with a top-level {plan.response_key} list, not a bare array.\n"
+                "- Keep the tests backend-only. Do not call GET / or assert on rendered HTML.\n"
+                "- Keep the tests valid for any non-empty list that uses id, title, and completed fields.\n"
                 "- Do not include any prose outside the JSON object."
             ),
             max_tokens=1000,
             required_files={test_path: "python"},
             collection_fields=["tests", "risks"],
-            validator=lambda bundle: self._is_valid_test_bundle(bundle, test_path, api_route=api_route),
+            validator=lambda bundle: self._is_valid_test_bundle(
+                bundle,
+                context,
+                test_path,
+                api_route=api_route,
+            ),
         )
         artifacts.update(llm_artifacts)
         if bundle is not None:
@@ -61,7 +68,7 @@ class QAAgent(BaseAgent):
 
         return AgentResult(
             role=self.role,
-            summary="Defined acceptance checks for generated contracts",
+            summary="Defined backend contract and rule checks",
             artifacts=artifacts,
             tests=resolved_tests,
             file_plan=FilePatchPlan(
@@ -71,7 +78,10 @@ class QAAgent(BaseAgent):
         )
 
     def _default_test_source(self, context: AgentContext) -> str:
+        plan = generation_plan(context)
         api_route = self._api_route(context)
+        contract_test_name = f"test_{plan.singular_slug}_contract"
+        rule_test_name = f"test_{plan.singular_slug}_visibility_rules"
         return f"""from __future__ import annotations
 
 import asyncio
@@ -84,7 +94,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from demo_app.tasks_api import app
+from demo_app.{self._backend_module_name(context)} import app
 
 
 async def _request(path: str) -> tuple[int, str]:
@@ -132,33 +142,27 @@ def _get_json(path: str) -> tuple[int, dict[str, Any]]:
     return status_code, json.loads(body)
 
 
-def _get_text(path: str) -> tuple[int, str]:
-    return asyncio.run(_request(path))
-
-
-def test_tasks_contract() -> None:
+def {contract_test_name}() -> None:
     status_code, payload = _get_json("{api_route}")
 
     assert status_code == 200
-    assert "tasks" in payload
-    assert isinstance(payload["tasks"], list)
-    assert payload["tasks"]
-    first_task = payload["tasks"][0]
-    assert isinstance(first_task["id"], int)
-    assert isinstance(first_task["title"], str)
-    assert first_task["title"]
-    assert isinstance(first_task["completed"], bool)
+    assert "{plan.response_key}" in payload
+    assert isinstance(payload["{plan.response_key}"], list)
+    assert payload["{plan.response_key}"]
+    first_item = payload["{plan.response_key}"][0]
+    assert isinstance(first_item["id"], int)
+    assert isinstance(first_item["title"], str)
+    assert first_item["title"]
+    assert isinstance(first_item["completed"], bool)
 
 
-def test_tasks_e2e() -> None:
-    api_status, payload = _get_json("{api_route}")
-    tasks = payload["tasks"]
-    ui_status, html = _get_text("/")
+def {rule_test_name}() -> None:
+    status_code, payload = _get_json("{api_route}")
+    items = payload["{plan.response_key}"]
 
-    assert api_status == 200
-    assert ui_status == 200
-    for task in tasks:
-        assert task["title"] in html
+    assert status_code == 200
+    assert any(item["completed"] is True for item in items)
+    assert any(item["completed"] is False for item in items)
 """
 
     def _schema_summary(self, context: AgentContext) -> str:
@@ -174,7 +178,14 @@ def test_tasks_e2e() -> None:
             return "none"
         return "; ".join(f"{api.method} {api.route}" for api in context.apis)
 
-    def _is_valid_test_bundle(self, bundle: StructuredGenerationBundle, test_path: str, *, api_route: str) -> bool:
+    def _is_valid_test_bundle(
+        self,
+        bundle: StructuredGenerationBundle,
+        context: AgentContext,
+        test_path: str,
+        *,
+        api_route: str,
+    ) -> bool:
         content = self._file_content(bundle, test_path)
         if content is None or not self._is_python_file(test_path, content):
             return False
@@ -185,16 +196,23 @@ def test_tasks_e2e() -> None:
         test_names = self._infer_test_names(content)
         if len(test_names) < 2:
             return False
-        if not self._imports_app(module):
+        if not self._imports_app(module, context):
             return False
         if not (self._imports_test_client(module) or self._has_app_request_helper(module, content)):
             return False
         if not (self._creates_test_client(module) or self._has_app_request_helper(module, content)):
             return False
         test_functions = [node for node in module.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
-        has_contract = any(self._is_contract_test(node, content, api_route=api_route) for node in test_functions)
-        has_e2e = any(self._is_e2e_test(node, content, api_route=api_route) for node in test_functions)
-        if not (has_contract and has_e2e):
+        response_key = generation_plan(context).response_key
+        has_contract = any(
+            self._is_contract_test(node, content, api_route=api_route, response_key=response_key)
+            for node in test_functions
+        )
+        has_rule_check = any(
+            self._is_visibility_rule_test(node, content, api_route=api_route, response_key=response_key)
+            for node in test_functions
+        )
+        if not (has_contract and has_rule_check):
             return False
         listed_tests = bundle.collections.get("tests", [])
         return not listed_tests or set(listed_tests).issubset(set(test_names))
@@ -209,11 +227,12 @@ def test_tasks_e2e() -> None:
                 return True
         return False
 
-    def _imports_app(self, module: ast.Module) -> bool:
+    def _imports_app(self, module: ast.Module, context: AgentContext) -> bool:
+        expected_module = f"demo_app.{self._backend_module_name(context)}"
         for node in module.body:
             if not isinstance(node, ast.ImportFrom):
                 continue
-            if node.module != "demo_app.tasks_api":
+            if node.module != expected_module:
                 continue
             if any(alias.name == "app" for alias in node.names):
                 return True
@@ -241,23 +260,35 @@ def test_tasks_e2e() -> None:
         )
         return has_request_helper and "await app(" in content and "http.response.start" in content
 
-    def _is_contract_test(self, node: ast.FunctionDef, content: str, *, api_route: str) -> bool:
+    def _is_contract_test(
+        self,
+        node: ast.FunctionDef,
+        content: str,
+        *,
+        api_route: str,
+        response_key: str,
+    ) -> bool:
         source = ast.get_source_segment(content, node) or ""
         return (
             self._references_path(node, source, api_route)
             and "status_code" in source
-            and self._extracts_tasks_from_payload(source)
+            and self._extracts_items_from_payload(source, response_key)
             and "isinstance" in source
         )
 
-    def _is_e2e_test(self, node: ast.FunctionDef, content: str, *, api_route: str) -> bool:
+    def _is_visibility_rule_test(
+        self,
+        node: ast.FunctionDef,
+        content: str,
+        *,
+        api_route: str,
+        response_key: str,
+    ) -> bool:
         source = ast.get_source_segment(content, node) or ""
         return (
             self._references_path(node, source, api_route)
-            and self._references_path(node, source, "/")
-            and ("response.text" in source or "html" in source)
-            and "title" in source
-            and self._extracts_tasks_from_payload(source)
+            and self._extracts_items_from_payload(source, response_key)
+            and "completed" in source
         )
 
     def _infer_test_names(self, content: str) -> list[str]:
@@ -289,19 +320,23 @@ def test_tasks_e2e() -> None:
             return True
         return f'"{path}"' in source or f"'{path}'" in source
 
-    def _extracts_tasks_from_payload(self, source: str) -> bool:
+    def _extracts_items_from_payload(self, source: str, response_key: str) -> bool:
         return (
-            '"tasks" in payload' in source
-            or "'tasks' in payload" in source
-            or 'response.json()["tasks"]' in source
-            or "response.json()['tasks']" in source
-            or '.json()["tasks"]' in source
-            or ".json()['tasks']" in source
-            or 'payload["tasks"]' in source
-            or "payload['tasks']" in source
+            f'"{response_key}" in payload' in source
+            or f"'{response_key}' in payload" in source
+            or f'response.json()["{response_key}"]' in source
+            or f"response.json()['{response_key}']" in source
+            or f'.json()["{response_key}"]' in source
+            or f".json()['{response_key}']" in source
+            or f'payload["{response_key}"]' in source
+            or f"payload['{response_key}']" in source
         )
 
     def _api_route(self, context: AgentContext) -> str:
         if context.apis:
             return context.apis[0].route
         return "/api/tasks"
+
+    def _backend_module_name(self, context: AgentContext) -> str:
+        plan = generation_plan(context)
+        return plan.backend_module_path.rsplit("/", 1)[-1].removesuffix(".py")

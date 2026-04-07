@@ -14,6 +14,7 @@ from .patches import (
     FilePatchPlan,
     PatchApplier,
     PatchConflictError,
+    render_patch_unified_diff,
 )
 from .rollback import Checkpoint, RollbackManager
 
@@ -31,6 +32,7 @@ __all__ = [
     "PatchConflictError",
     "PreviewLaunchConfig",
     "PreviewLaunchResult",
+    "render_patch_unified_diff",
     "RollbackManager",
     "RuntimeExecutor",
 ]

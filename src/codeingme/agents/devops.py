@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from codeingme.agents.base import AgentContext, AgentResult, BaseAgent, StructuredGenerationBundle
+from codeingme.agents.naming import generation_plan
 from codeingme.runtime import FilePatch, FilePatchPlan
 
 
@@ -8,8 +9,9 @@ class DevOpsAgent(BaseAgent):
     role = "devops"
 
     def run(self, context: AgentContext) -> AgentResult:
-        dockerfile = self._default_dockerfile()
-        compose_file = self._default_compose_file()
+        module_ref = f"demo_app.{self._backend_module_name(context)}:app"
+        dockerfile = self._default_dockerfile(context)
+        compose_file = self._default_compose_file(context)
         dockerignore = self._default_dockerignore()
         artifacts: dict[str, object] = {
             "docker": "docker compose up app",
@@ -31,16 +33,17 @@ class DevOpsAgent(BaseAgent):
                 "Response format:\n"
                 "- Return JSON only.\n"
                 '- Include files for "Dockerfile", "docker-compose.yml", and ".dockerignore".\n'
+                "- Do not include application source files, tests, or placeholder package files.\n"
                 '- Each file object must use keys path, language, and content.\n'
                 '- The content value may be plain text or a fenced code block.\n'
                 '- Include services as a list like ["app", "test"].\n'
-                '- Include commands as a list of exact runtime commands.\n'
+                '- Include commands exactly as ["docker compose up app", "docker compose run --rm test python -m pytest tests_generated"].\n'
                 '- Include risks as a list of short risk notes.\n'
                 "Constraints:\n"
                 "- Build from python:3.11-slim.\n"
                 "- Copy demo_app and tests_generated into /workspace.\n"
                 "- Install fastapi, httpx, pytest, and uvicorn.\n"
-                "- The app service must run demo_app.tasks_api:app with uvicorn on port 8000.\n"
+                f"- The app service must run {module_ref} with uvicorn on port 8000.\n"
                 "- The test service must run python -m pytest tests_generated.\n"
                 "- Configure PYTHONPATH=/workspace in the container.\n"
                 "- Do not include any prose outside the JSON object."
@@ -84,8 +87,9 @@ class DevOpsAgent(BaseAgent):
             ),
         )
 
-    def _default_dockerfile(self) -> str:
-        return """FROM python:3.11-slim
+    def _default_dockerfile(self, context: AgentContext) -> str:
+        module_ref = f"demo_app.{self._backend_module_name(context)}:app"
+        return f"""FROM python:3.11-slim
 
 WORKDIR /workspace
 
@@ -101,11 +105,12 @@ COPY tests_generated ./tests_generated
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "demo_app.tasks_api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "{module_ref}", "--host", "0.0.0.0", "--port", "8000"]
 """
 
-    def _default_compose_file(self) -> str:
-        return """services:
+    def _default_compose_file(self, context: AgentContext) -> str:
+        module_ref = f"demo_app.{self._backend_module_name(context)}:app"
+        return f"""services:
   app:
     build:
       context: .
@@ -113,9 +118,9 @@ CMD ["python", "-m", "uvicorn", "demo_app.tasks_api:app", "--host", "0.0.0.0", "
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace
-    command: python -m uvicorn demo_app.tasks_api:app --host 0.0.0.0 --port 8000
+    command: python -m uvicorn {module_ref} --host 0.0.0.0 --port 8000
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${{APP_PORT:-8000}}:8000"
   test:
     build:
       context: .
@@ -146,6 +151,10 @@ graph.json
             return "none"
         return "; ".join(f"{api.method} {api.route}" for api in context.apis)
 
+    def _backend_module_name(self, context: AgentContext) -> str:
+        plan = generation_plan(context)
+        return plan.backend_module_path.rsplit("/", 1)[-1].removesuffix(".py")
+
     def _is_valid_devops_bundle(self, bundle: StructuredGenerationBundle) -> bool:
         dockerfile = self._file_content(bundle, "Dockerfile")
         compose_file = self._file_content(bundle, "docker-compose.yml")
@@ -160,7 +169,8 @@ graph.json
             "uvicorn",
             "COPY demo_app ./demo_app",
             "COPY tests_generated ./tests_generated",
-            "demo_app.tasks_api:app",
+            "demo_app.",
+            ":app",
         ]
         required_compose_fragments = [
             "services:",
@@ -168,7 +178,6 @@ graph.json
             "test:",
             "dockerfile: Dockerfile",
             "PYTHONPATH: /workspace",
-            "python -m uvicorn demo_app.tasks_api:app --host 0.0.0.0 --port 8000",
             "python -m pytest tests_generated",
         ]
         required_dockerignore_fragments = [
@@ -183,10 +192,23 @@ graph.json
             return False
         if not self._has_items(bundle.collections.get("services", []), ["app", "test"]):
             return False
-        return self._has_items(
-            bundle.collections.get("commands", []),
-            [
-                "python -m uvicorn demo_app.tasks_api:app --host 0.0.0.0 --port 8000",
-                "python -m pytest tests_generated",
-            ],
+        if not self._contains_uvicorn_command(dockerfile):
+            return False
+        if not self._contains_uvicorn_command(compose_file):
+            return False
+        commands = bundle.collections.get("commands", [])
+        return (
+            "docker compose up app" in commands
+            and "docker compose run --rm test python -m pytest tests_generated" in commands
+        )
+
+    def _contains_uvicorn_command(self, content: str) -> bool:
+        return (
+            "uvicorn" in content
+            and "demo_app." in content
+            and ":app" in content
+            and "--host" in content
+            and "0.0.0.0" in content
+            and "--port" in content
+            and "8000" in content
         )

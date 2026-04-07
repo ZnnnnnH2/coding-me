@@ -1,2 +1,3 @@
 [console_scripts]
 codeingme = codeingme.cli:main
+codeingme-studio = codeingme.studio:main

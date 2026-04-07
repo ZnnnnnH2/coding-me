@@ -32,25 +32,34 @@ Specification
 
 ## Quick Start
 
-Run the built-in task service demo from a structured spec bundle:
+Sync the environment first. If this repository was copied from WSL to Windows, this also recreates `.venv` for the current platform:
 
 ```bash
-source .venv/bin/activate
-python -m codeingme demo task_service
+uv sync
 ```
 
-Run directly from a spec directory:
+Run an included example spec bundle:
 
 ```bash
-source .venv/bin/activate
-python -m codeingme run-spec specs/task_service
+uv run python -m codeingme demo warehouse_dispatch
+```
+
+Run directly from any compatible spec directory:
+
+```bash
+uv run python -m codeingme run-spec specs/warehouse_dispatch
 ```
 
 Inspect the parsed specification summary:
 
 ```bash
-source .venv/bin/activate
-python -m codeingme spec-summary specs/task_service
+uv run python -m codeingme spec-summary specs/warehouse_dispatch
+```
+
+Launch the interactive studio demo:
+
+```bash
+uv run codeingme-studio --host 127.0.0.1 --port 8787
 ```
 
 The current prototype still writes generated runtime artifacts into a workspace-local `demo_app/` directory for compatibility with the existing orchestrator and tests.
@@ -64,10 +73,29 @@ Specification bundles live under `specs/` and currently accept:
 - `business_rules.yaml`
 - `user_story.md`
 
-Included demo bundles:
+Included example spec bundles:
 
 - `specs/task_service/`
 - `specs/order_service/`
+- `specs/warehouse_dispatch/`
+
+These directories are example structured inputs, not hardcoded generation modes.
+
+## Studio Demo
+
+`codeingme studio` serves a browser-based demo UI that lets you:
+
+- load an example specification bundle or import your own supported files
+- trigger the generation pipeline in a dedicated run workspace
+- observe state-machine transitions, agent activity, cascade batches, and verification output live
+- inspect generated backend files after the run completes
+
+The studio UI currently accepts the same structured files as the CLI pipeline:
+
+- `openapi.yaml`
+- `schema.sql`
+- `business_rules.yaml`
+- `user_story.md`
 
 ## Repository Structure
 
@@ -108,20 +136,22 @@ This repository is still an early-stage research prototype. The current implemen
 
 The relay client targets `https://9985678.xyz/v1` by default.
 
-```bash
-export OPENAI_API_KEY=...
-export CODEINGME_LLM_MODEL=gpt-5.4
-export CODEINGME_ENABLE_LLM=1
+Set these values in `.env` or your shell before running LLM-backed commands:
+
+```dotenv
+OPENAI_API_KEY=...
+CODEINGME_LLM_MODEL=gpt-5.4
+CODEINGME_ENABLE_LLM=1
 ```
 
 If your machine needs the local proxy from environment variables:
 
-```bash
-export CODEINGME_LLM_TRUST_ENV=1
+```dotenv
+CODEINGME_LLM_TRUST_ENV=1
 ```
 
 Connectivity check:
 
 ```bash
-codeingme llm-test "Reply with OK only."
+uv run codeingme llm-test "Reply with OK only."
 ```

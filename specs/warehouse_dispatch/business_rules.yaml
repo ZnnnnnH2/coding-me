@@ -1,0 +1,4 @@
+rules:
+  - Warehouse dispatch tasks must expose their completion state through the API response.
+  - Completed dispatch tasks must remain visible in the queue for shift handoff review.
+  - The dispatch queue endpoint must stay readable even when some tasks are already complete.

@@ -14,8 +14,8 @@ class AcceptanceTestGenerator:
                 path=test_path,
             ),
             TestSpec(
-                name=f"{app_name}_e2e_test",
-                description=f"Verify the {app_name} flow completes end-to-end",
+                name=f"{app_name}_rule_test",
+                description=f"Verify the {app_name} backend rules remain visible in the API payload",
                 expected_state="green",
                 path=test_path,
             ),

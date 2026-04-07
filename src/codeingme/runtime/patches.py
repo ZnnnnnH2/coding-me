@@ -123,6 +123,36 @@ class FilePatchPlan:
         return cls(name=name, patches=patches)
 
 
+def render_patch_unified_diff(patch: FilePatch, current_content: str | None) -> str:
+    previous = current_content or ""
+    if patch.operation is FilePatchOperation.WRITE:
+        next_content = patch.content or ""
+        fromfile = "/dev/null" if current_content is None else f"a/{patch.path}"
+        tofile = f"b/{patch.path}"
+    elif patch.operation is FilePatchOperation.DELETE:
+        next_content = ""
+        fromfile = f"a/{patch.path}"
+        tofile = "/dev/null"
+    elif patch.operation is FilePatchOperation.DIFF:
+        if current_content is None:
+            raise PatchConflictError(f"Cannot render diff for missing file: {patch.path}")
+        next_content = _apply_diff_content(current_content, patch)
+        fromfile = f"a/{patch.path}"
+        tofile = f"b/{patch.path}"
+    else:
+        raise ValueError(f"Unsupported patch operation: {patch.operation}")
+
+    return "\n".join(
+        difflib.unified_diff(
+            previous.splitlines(),
+            next_content.splitlines(),
+            fromfile=fromfile,
+            tofile=tofile,
+            lineterm="",
+        )
+    )
+
+
 def compact_write_plan(root_dir: Path | str, plan: FilePatchPlan) -> FilePatchPlan:
     root_path = Path(root_dir)
     compacted_patches: list[FilePatch] = []
