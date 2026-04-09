@@ -498,6 +498,8 @@ def test_studio_creates_run_and_serves_generated_backend_files(tmp_path) -> None
     payload = response.json()
     assert payload["status"] == "succeeded"
     assert payload["current_state"] == "done"
+    assert ".codeingme\\runs\\studio\\custom\\" in payload["workspace_root"]
+    assert payload["workspace_root"].endswith("\\workspace")
     assert any(event["stage"] == "agent" and event["role"] == "architect" for event in payload["events"])
     assert any(event["stage"] == "agent" and event["role"] == "backend" for event in payload["events"])
     assert any(file["path"] == "demo_app/tasks_api.py" for file in payload["files"])

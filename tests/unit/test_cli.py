@@ -27,6 +27,9 @@ def test_demo_command_runs_orchestrator_with_spec_prompt(monkeypatch, capsys) ->
     recorded: dict[str, str] = {}
 
     class _RecordingOrchestrator:
+        def __init__(self, workspace_root=None) -> None:
+            recorded["workspace_root"] = str(workspace_root) if workspace_root is not None else ""
+
         def run(self, requirement: str) -> OrchestrationResult:
             recorded["requirement"] = requirement
             return OrchestrationResult(
@@ -44,6 +47,8 @@ def test_demo_command_runs_orchestrator_with_spec_prompt(monkeypatch, capsys) ->
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert "task service backend module" in recorded["requirement"]
+    assert ".codeingme\\runs\\cli\\task_service\\" in recorded["workspace_root"]
+    assert recorded["workspace_root"].endswith("\\workspace")
     assert payload["spec_bundle"]["service_name"] == "task_service"
 
 

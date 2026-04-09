@@ -3,7 +3,7 @@
 .codex
 .venv/
 .pytest_cache/
-.pytest-tmp/
+.pytest-tmp*
 __pycache__/
 *.py[cod]
 .*/

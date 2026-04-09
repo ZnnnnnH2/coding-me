@@ -17,8 +17,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from .env import load_project_dotenv
 from .orchestrator import CodeingmeOrchestrator, OrchestrationEvent
 from .orchestrator.state_machine import ExecutionState
+from .run_paths import create_run_root
 from .spec_parser import load_spec_bundle
 
 
@@ -43,6 +45,9 @@ CANONICAL_SPEC_FILES = {
 TERMINAL_RUN_STATES = {"succeeded", "failed"}
 
 
+load_project_dotenv()
+
+
 class StudioRunRequest(BaseModel):
     preset_name: str | None = None
     files: dict[str, str] = Field(default_factory=dict)
@@ -51,6 +56,8 @@ class StudioRunRequest(BaseModel):
 @dataclass(slots=True)
 class StudioRunRecord:
     run_id: str
+    source: str
+    case_name: str
     status: str
     created_at: str
     updated_at: str
@@ -69,6 +76,8 @@ class StudioRunRecord:
     def to_dict(self) -> dict[str, object]:
         return {
             "run_id": self.run_id,
+            "source": self.source,
+            "case_name": self.case_name,
             "status": self.status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -98,7 +107,7 @@ class StudioRunManager:
     ) -> None:
         self.repo_root = Path(repo_root) if repo_root is not None else REPO_ROOT
         self.specs_root = self.repo_root / "specs"
-        self.run_root = self.repo_root / ".codeingme" / "studio_runs"
+        self.run_root = self.repo_root / ".codeingme" / "runs" / "studio"
         self.run_root.mkdir(parents=True, exist_ok=True)
         self.orchestrator_factory = orchestrator_factory or (
             lambda workspace_root: CodeingmeOrchestrator(workspace_root=workspace_root)
@@ -157,8 +166,8 @@ class StudioRunManager:
 
     def create_run(self, payload: StudioRunRequest) -> dict[str, object]:
         files = self._resolve_request_files(payload)
-        run_id = uuid4().hex[:12]
-        run_root = self.run_root / run_id
+        case_name = payload.preset_name or "custom"
+        run_root, run_id = create_run_root(self.repo_root, source="studio", case_name=case_name)
         spec_dir = run_root / "spec_bundle"
         workspace_root = run_root / "workspace"
         spec_dir.mkdir(parents=True, exist_ok=True)
@@ -171,6 +180,8 @@ class StudioRunManager:
 
         record = StudioRunRecord(
             run_id=run_id,
+            source="studio",
+            case_name=case_name,
             status="queued",
             created_at=_utc_now(),
             updated_at=_utc_now(),
@@ -476,6 +487,8 @@ class StudioRunManager:
     def _record_storage_payload(self, record: StudioRunRecord) -> dict[str, object]:
         return {
             **record.to_dict(),
+            "source": record.source,
+            "case_name": record.case_name,
             "run_root": str(record.run_root),
             "spec_dir": str(record.spec_dir),
         }
@@ -489,8 +502,8 @@ class StudioRunManager:
     def _load_runs_from_disk(self) -> None:
         if not self.run_root.exists():
             return
-        for run_dir in sorted(path for path in self.run_root.iterdir() if path.is_dir()):
-            payload_path = run_dir / "run.json"
+        for payload_path in sorted(self.run_root.rglob("run.json")):
+            run_dir = payload_path.parent
             if not payload_path.exists():
                 continue
             try:
@@ -500,6 +513,8 @@ class StudioRunManager:
             try:
                 record = StudioRunRecord(
                     run_id=payload["run_id"],
+                    source=payload.get("source", "studio"),
+                    case_name=payload.get("case_name", run_dir.parent.name if run_dir.parent != self.run_root else "custom"),
                     status=payload["status"],
                     created_at=payload["created_at"],
                     updated_at=payload["updated_at"],
@@ -530,6 +545,8 @@ class StudioRunManager:
         resume_from_state = self._resume_from_state(record)
         return {
             "run_id": record.run_id,
+            "source": record.source,
+            "case_name": record.case_name,
             "status": record.status,
             "created_at": record.created_at,
             "updated_at": record.updated_at,

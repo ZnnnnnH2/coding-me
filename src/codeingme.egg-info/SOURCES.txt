@@ -5,6 +5,7 @@ src/codeingme/__main__.py
 src/codeingme/cli.py
 src/codeingme/env.py
 src/codeingme/generation_plan.py
+src/codeingme/run_paths.py
 src/codeingme/studio.py
 src/codeingme.egg-info/PKG-INFO
 src/codeingme.egg-info/SOURCES.txt

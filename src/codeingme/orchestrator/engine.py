@@ -81,7 +81,7 @@ class CodeingmeOrchestrator:
         graph_path: Path | str | None = None,
         llm_client: RelayLLMClient | None = None,
     ) -> None:
-        default_workspace = Path.cwd() / ".codeingme" / "demo_workspace"
+        default_workspace = Path.cwd() / ".codeingme" / "runs" / "direct" / "adhoc" / "current" / "workspace"
         self.workspace_root = Path(workspace_root) if workspace_root is not None else default_workspace
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.graph_path = Path(graph_path) if graph_path is not None else self.workspace_root / "graph.json"

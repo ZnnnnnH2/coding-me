@@ -64,7 +64,7 @@ Launch the interactive studio demo:
 uv run codeingme-studio --host 127.0.0.1 --port 8787
 ```
 
-The current prototype still writes generated runtime artifacts into a workspace-local `demo_app/` directory for compatibility with the existing orchestrator and tests.
+The current prototype writes generated runtime artifacts into per-run workspaces under `.codeingme/runs/<source>/<case>/<run_id>/workspace/`. Each run still contains a workspace-local `demo_app/` directory for compatibility with the existing orchestrator and tests.
 
 ## Structured Inputs
 
@@ -89,6 +89,8 @@ These directories are example structured inputs, not hardcoded generation modes.
 
 - load an example specification bundle or import your own supported files
 - trigger the generation pipeline in a dedicated run workspace
+- revisit persisted historical runs from disk
+- resume failed runs from their recorded failure point
 - observe state-machine transitions, agent activity, cascade batches, and verification output live
 - inspect generated backend files after the run completes
 
