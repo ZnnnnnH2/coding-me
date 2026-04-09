@@ -1,3 +1,5 @@
+"""覆盖状态机流转逻辑的单元测试。"""
+
 from __future__ import annotations
 
 from codeingme.orchestrator.state_machine import ExecutionState, StateMachine

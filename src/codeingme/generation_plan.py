@@ -1,3 +1,5 @@
+"""负责根据上下文推导生成文件命名方案。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

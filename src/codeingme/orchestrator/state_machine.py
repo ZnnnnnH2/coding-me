@@ -1,3 +1,5 @@
+"""定义编排流程的状态机。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

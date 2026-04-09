@@ -1,3 +1,5 @@
+"""覆盖规格解析逻辑的单元测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path

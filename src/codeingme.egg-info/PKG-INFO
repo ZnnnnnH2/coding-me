@@ -51,6 +51,8 @@ Sync the environment first. If this repository was copied from WSL to Windows, t
 uv sync
 ```
 
+If you want LLM-backed runs, create `.env` from `.env.example` and fill in the `CODEINGME_*` values first.
+
 Run an included example spec bundle:
 
 ```bash
@@ -147,14 +149,19 @@ This repository is still an early-stage research prototype. The current implemen
 
 ## LLM Relay
 
-The relay client targets `https://9985678.xyz/v1` by default.
-
-Set these values in `.env` or your shell before running LLM-backed commands:
+LLM relay settings are loaded from `.env`. Copy `.env.example` to `.env` and fill in the required values before running LLM-backed commands. The client no longer uses built-in provider defaults for base URL or model.
 
 ```dotenv
-OPENAI_API_KEY=...
-CODEINGME_LLM_MODEL=gpt-5.4
 CODEINGME_ENABLE_LLM=1
+CODEINGME_LLM_API_KEY=...
+CODEINGME_LLM_BASE_URL=https://your-provider.example/v1
+CODEINGME_LLM_MODEL=gpt-5.4
+CODEINGME_LLM_REASONING_EFFORT=medium
+CODEINGME_LLM_TEMPERATURE=0.2
+CODEINGME_LLM_TIMEOUT=90
+CODEINGME_LLM_CACHE_ENABLED=1
+CODEINGME_LLM_CACHE_SIZE=256
+CODEINGME_LLM_MAX_RETRIES=2
 ```
 
 If your machine needs the local proxy from environment variables:

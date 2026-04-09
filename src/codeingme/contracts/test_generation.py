@@ -1,3 +1,5 @@
+"""提供默认的验收测试生成器。"""
+
 from __future__ import annotations
 
 from codeingme.contracts import TestSpec

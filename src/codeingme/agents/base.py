@@ -1,3 +1,5 @@
+"""定义代理通用上下文、结果和基础能力。"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

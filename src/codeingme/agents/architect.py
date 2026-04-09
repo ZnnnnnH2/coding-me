@@ -1,3 +1,5 @@
+"""实现架构代理，用于生成初始合同。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

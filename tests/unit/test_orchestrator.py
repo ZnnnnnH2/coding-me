@@ -1,3 +1,5 @@
+"""覆盖主编排器行为的单元测试。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

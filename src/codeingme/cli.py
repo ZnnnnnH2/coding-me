@@ -1,3 +1,5 @@
+"""定义命令行入口和子命令分发逻辑。"""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .env import load_project_dotenv
-from .llm import RelayLLMClient
+from .llm import LLMConfig, RelayLLMClient
 from .orchestrator.engine import CodeingmeOrchestrator
 from .spec_parser import SpecificationBundle, load_spec_bundle
 
@@ -90,9 +92,7 @@ def main(argv: list[str] | None = None) -> int:
 def _require_llm_client() -> RelayLLMClient:
     client = RelayLLMClient.from_env()
     if client is None:
-        raise RuntimeError(
-            "Missing LLM credentials. Set CODEINGME_LLM_API_KEY or OPENAI_API_KEY first."
-        )
+        raise RuntimeError(LLMConfig.missing_required_env_message())
     return client
 
 

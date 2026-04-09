@@ -1,3 +1,5 @@
+"""实现后端代理，用于生成 FastAPI 服务代码。"""
+
 from __future__ import annotations
 
 import ast

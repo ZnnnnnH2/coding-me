@@ -1,3 +1,5 @@
+"""导出图模型、查询与切片能力。"""
+
 from .models import GraphDelta, GraphEdge, GraphEdgeType, GraphNode, NodeKind, SourceLocation
 from .query import GraphQueryService, TopologyResult
 from .slice import GraphSlice

@@ -1,3 +1,5 @@
+"""实现运维代理，用于生成容器与运行配置。"""
+
 from __future__ import annotations
 
 from codeingme.agents.base import AgentContext, AgentResult, BaseAgent, StructuredGenerationBundle

@@ -1,3 +1,5 @@
+"""覆盖图模型与查询能力的单元测试。"""
+
 from __future__ import annotations
 
 from codeingme.graph import (

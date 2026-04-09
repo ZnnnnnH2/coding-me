@@ -1,3 +1,5 @@
+"""实现与 LLM 服务交互的客户端。"""
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -11,8 +13,11 @@ from typing import Any
 import httpx
 
 
-DEFAULT_BASE_URL = "https://9985678.xyz/v1"
-DEFAULT_MODEL = "gpt-5.4"
+REQUIRED_LLM_ENV_VARS = (
+    "CODEINGME_LLM_API_KEY",
+    "CODEINGME_LLM_BASE_URL",
+    "CODEINGME_LLM_MODEL",
+)
 DEFAULT_TIMEOUT = 90.0
 DEFAULT_MAX_RETRIES = 2
 
@@ -20,9 +25,9 @@ DEFAULT_MAX_RETRIES = 2
 @dataclass(slots=True)
 class LLMConfig:
     api_key: str
-    base_url: str = DEFAULT_BASE_URL
-    model: str = DEFAULT_MODEL
-    reasoning_effort: str | None = "medium"
+    base_url: str
+    model: str
+    reasoning_effort: str | None = None
     temperature: float = 0.2
     timeout: float = DEFAULT_TIMEOUT
     trust_env: bool = False
@@ -32,25 +37,39 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> LLMConfig | None:
-        api_key = os.getenv("CODEINGME_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-        if not api_key:
+        required_values = {
+            name: _normalized_env_value(name)
+            for name in REQUIRED_LLM_ENV_VARS
+        }
+        if not any(required_values.values()):
             return None
-        base_url = (
-            os.getenv("CODEINGME_LLM_BASE_URL")
-            or os.getenv("OPENAI_BASE_URL")
-            or DEFAULT_BASE_URL
-        )
+        missing = [name for name, value in required_values.items() if value is None]
+        if missing:
+            raise RuntimeError(cls.missing_required_env_message(missing))
         return cls(
-            api_key=api_key,
-            base_url=base_url,
-            model=os.getenv("CODEINGME_LLM_MODEL", DEFAULT_MODEL),
-            reasoning_effort=os.getenv("CODEINGME_LLM_REASONING_EFFORT", "medium"),
+            api_key=required_values["CODEINGME_LLM_API_KEY"],
+            base_url=required_values["CODEINGME_LLM_BASE_URL"],
+            model=required_values["CODEINGME_LLM_MODEL"],
+            reasoning_effort=_normalized_env_value("CODEINGME_LLM_REASONING_EFFORT"),
             temperature=float(os.getenv("CODEINGME_LLM_TEMPERATURE", "0.2")),
             timeout=float(os.getenv("CODEINGME_LLM_TIMEOUT", str(DEFAULT_TIMEOUT))),
             trust_env=os.getenv("CODEINGME_LLM_TRUST_ENV", "0") == "1",
             cache_enabled=os.getenv("CODEINGME_LLM_CACHE_ENABLED", "1") != "0",
             cache_size=int(os.getenv("CODEINGME_LLM_CACHE_SIZE", "256")),
             max_retries=max(1, int(os.getenv("CODEINGME_LLM_MAX_RETRIES", str(DEFAULT_MAX_RETRIES)))),
+        )
+
+    @classmethod
+    def required_env_vars(cls) -> tuple[str, ...]:
+        return REQUIRED_LLM_ENV_VARS
+
+    @classmethod
+    def missing_required_env_message(cls, missing: list[str] | None = None) -> str:
+        missing_vars = missing or list(REQUIRED_LLM_ENV_VARS)
+        return (
+            "Missing LLM configuration. Set "
+            + ", ".join(missing_vars)
+            + " in .env before running LLM-backed commands."
         )
 
 
@@ -750,3 +769,11 @@ class RelayLLMClient:
             if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
                 normalized["total_tokens"] = prompt_tokens + completion_tokens
         return normalized
+
+
+def _normalized_env_value(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None

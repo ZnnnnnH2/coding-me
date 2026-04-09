@@ -1,3 +1,5 @@
+"""提供工作区检查点与回滚能力。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

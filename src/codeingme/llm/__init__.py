@@ -1,8 +1,8 @@
-from .client import DEFAULT_BASE_URL, DEFAULT_MODEL, LLMCompletion, LLMConfig, RelayLLMClient
+"""导出 LLM 客户端与配置对象。"""
+
+from .client import LLMCompletion, LLMConfig, RelayLLMClient
 
 __all__ = [
-    "DEFAULT_BASE_URL",
-    "DEFAULT_MODEL",
     "LLMCompletion",
     "LLMConfig",
     "RelayLLMClient",

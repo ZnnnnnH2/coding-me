@@ -1,3 +1,5 @@
+"""定义内置演示应用的规格蓝图。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

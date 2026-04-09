@@ -1,3 +1,5 @@
+"""提供图数据的存取与持久化能力。"""
+
 from __future__ import annotations
 
 from collections import defaultdict

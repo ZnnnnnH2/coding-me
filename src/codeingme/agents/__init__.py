@@ -1,3 +1,5 @@
+"""导出各类生成代理。"""
+
 from .base import AgentContext, AgentResult, BaseAgent
 from .architect import ArchitectAgent
 from .backend import BackendAgent

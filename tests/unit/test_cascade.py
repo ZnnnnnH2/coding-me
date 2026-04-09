@@ -1,3 +1,5 @@
+"""覆盖级联规划逻辑的单元测试。"""
+
 from __future__ import annotations
 
 from codeingme.graph import GraphEdge, GraphEdgeType, GraphNode, GraphStore, NodeKind

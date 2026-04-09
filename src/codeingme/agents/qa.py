@@ -1,3 +1,5 @@
+"""实现 QA 代理，用于生成测试用例。"""
+
 from __future__ import annotations
 
 import ast

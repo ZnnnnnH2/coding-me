@@ -1,3 +1,5 @@
+"""负责将 AST 解析结果同步到图存储。"""
+
 from __future__ import annotations
 
 from codeingme.ast_pipeline.extractors import PythonEntityExtractor

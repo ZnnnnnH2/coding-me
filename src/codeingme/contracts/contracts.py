@@ -1,3 +1,5 @@
+"""定义需求、接口、数据模型与测试合同。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

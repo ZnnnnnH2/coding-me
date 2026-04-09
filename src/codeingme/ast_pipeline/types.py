@@ -1,3 +1,5 @@
+"""定义 AST 管道使用的数据类型。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

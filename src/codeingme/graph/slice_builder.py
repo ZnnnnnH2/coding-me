@@ -1,3 +1,5 @@
+"""负责按节点构造上下文图切片。"""
+
 from __future__ import annotations
 
 from .models import GraphEdgeType

@@ -1,3 +1,5 @@
+"""覆盖演示流程的端到端测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path

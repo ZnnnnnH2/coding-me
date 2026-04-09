@@ -1,3 +1,5 @@
+"""负责解析 Python 模块源码。"""
+
 from __future__ import annotations
 
 import ast

@@ -1,3 +1,5 @@
+"""封装生成计划的命名入口。"""
+
 from __future__ import annotations
 
 from codeingme.agents.base import AgentContext

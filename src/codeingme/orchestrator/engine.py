@@ -1,3 +1,5 @@
+"""实现主编排器，串联生成、修复与验证流程。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -20,7 +22,7 @@ from codeingme.graph import (
     NodeKind,
     SourceLocation,
 )
-from codeingme.llm import RelayLLMClient
+from codeingme.llm import LLMConfig, RelayLLMClient
 from codeingme.orchestrator.cascade import CascadePlan, CascadePlanner, CascadeTask
 from codeingme.orchestrator.state_machine import ExecutionState, StateMachine
 from codeingme.runtime import (
@@ -92,6 +94,8 @@ class CodeingmeOrchestrator:
         self.llm_client = llm_client
         if self.llm_client is None and os.getenv("CODEINGME_ENABLE_LLM") == "1":
             self.llm_client = RelayLLMClient.from_env()
+            if self.llm_client is None:
+                raise RuntimeError(LLMConfig.missing_required_env_message())
         self.architect = ArchitectAgent()
         self.qa = QAAgent()
         self.backend = BackendAgent()

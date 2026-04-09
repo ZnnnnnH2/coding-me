@@ -1,3 +1,5 @@
+"""覆盖 AST 同步能力的集成测试。"""
+
 from __future__ import annotations
 
 from codeingme.ast_pipeline import GraphSynchronizer

@@ -1,3 +1,5 @@
+"""覆盖命令行行为的单元测试。"""
+
 from __future__ import annotations
 
 import json
@@ -49,8 +51,8 @@ def test_main_prefers_project_dotenv_over_shell_env(tmp_path, monkeypatch, capsy
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "OPENAI_API_KEY=dotenv-key",
-                "OPENAI_BASE_URL=https://dotenv.example/v1",
+                "CODEINGME_LLM_API_KEY=dotenv-key",
+                "CODEINGME_LLM_BASE_URL=https://dotenv.example/v1",
                 "CODEINGME_LLM_MODEL=dotenv-model",
             ]
         )
@@ -58,18 +60,18 @@ def test_main_prefers_project_dotenv_over_shell_env(tmp_path, monkeypatch, capsy
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "shell-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://shell.example/v1")
+    monkeypatch.setenv("CODEINGME_LLM_API_KEY", "shell-key")
+    monkeypatch.setenv("CODEINGME_LLM_BASE_URL", "https://shell.example/v1")
     monkeypatch.setenv("CODEINGME_LLM_MODEL", "shell-model")
 
     captured: dict[str, str | None] = {}
 
     class _FakeClient:
         def __init__(self) -> None:
-            captured["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY")
-            captured["OPENAI_BASE_URL"] = os.environ.get("OPENAI_BASE_URL")
+            captured["CODEINGME_LLM_API_KEY"] = os.environ.get("CODEINGME_LLM_API_KEY")
+            captured["CODEINGME_LLM_BASE_URL"] = os.environ.get("CODEINGME_LLM_BASE_URL")
             captured["CODEINGME_LLM_MODEL"] = os.environ.get("CODEINGME_LLM_MODEL")
-            self.config = SimpleNamespace(base_url=os.environ.get("OPENAI_BASE_URL"))
+            self.config = SimpleNamespace(base_url=os.environ.get("CODEINGME_LLM_BASE_URL"))
 
         def prompt(self, *_args, **_kwargs) -> LLMCompletion:
             return LLMCompletion(model=os.environ["CODEINGME_LLM_MODEL"], content="OK")
@@ -84,8 +86,8 @@ def test_main_prefers_project_dotenv_over_shell_env(tmp_path, monkeypatch, capsy
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert captured == {
-        "OPENAI_API_KEY": "dotenv-key",
-        "OPENAI_BASE_URL": "https://dotenv.example/v1",
+        "CODEINGME_LLM_API_KEY": "dotenv-key",
+        "CODEINGME_LLM_BASE_URL": "https://dotenv.example/v1",
         "CODEINGME_LLM_MODEL": "dotenv-model",
     }
     assert payload["base_url"] == "https://dotenv.example/v1"
@@ -93,9 +95,9 @@ def test_main_prefers_project_dotenv_over_shell_env(tmp_path, monkeypatch, capsy
 
 
 def test_main_restores_shell_env_after_loading_project_dotenv(tmp_path, monkeypatch, capsys) -> None:
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-key\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("CODEINGME_LLM_API_KEY=dotenv-key\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "shell-key")
+    monkeypatch.setenv("CODEINGME_LLM_API_KEY", "shell-key")
 
     class _FakeClient:
         config = SimpleNamespace(base_url="https://example.test/v1")
@@ -112,7 +114,7 @@ def test_main_restores_shell_env_after_loading_project_dotenv(tmp_path, monkeypa
 
     json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert os.environ["OPENAI_API_KEY"] == "shell-key"
+    assert os.environ["CODEINGME_LLM_API_KEY"] == "shell-key"
 
 
 def test_llm_test_returns_structured_error_when_provider_fails(monkeypatch, capsys) -> None:

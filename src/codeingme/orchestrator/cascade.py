@@ -1,3 +1,5 @@
+"""定义图感知级联修复的规划逻辑。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

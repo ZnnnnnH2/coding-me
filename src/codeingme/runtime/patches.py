@@ -1,3 +1,5 @@
+"""定义文件补丁模型与补丁应用逻辑。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

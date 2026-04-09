@@ -1,3 +1,5 @@
+"""提供图影响范围与拓扑查询能力。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,3 +1,5 @@
+"""导出编排器与事件模型。"""
+
 from .cascade import CascadePlan, CascadePlanner, CascadeTask
 from .engine import CodeingmeOrchestrator, OrchestrationEvent, OrchestrationResult
 from .state_machine import ExecutionState, StateMachine

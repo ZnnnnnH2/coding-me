@@ -1,3 +1,5 @@
+"""定义 AST 流式处理辅助结构。"""
+
 from __future__ import annotations
 
 

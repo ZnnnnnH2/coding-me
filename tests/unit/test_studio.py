@@ -1,3 +1,5 @@
+"""覆盖 Studio 演示接口与运行管理的单元测试。"""
+
 from __future__ import annotations
 
 import sys
@@ -257,11 +259,12 @@ def test_studio_home_surfaces_full_demo_panels() -> None:
 
     assert response.status_code == 200
     assert "rollback" in response.text
-    assert "Agent Trace" in response.text
-    assert "Cascade Map" in response.text
-    assert "Graph Slice" in response.text
-    assert "Artifact Manifest" in response.text
-    assert "Generated Files" in response.text
+    assert "工作台" in response.text
+    assert 'data-panel="agent"' in response.text
+    assert 'data-panel="cascade"' in response.text
+    assert 'data-panel="graph"' in response.text
+    assert 'data-panel="artifact"' in response.text
+    assert "生成文件" in response.text
 
 
 def test_studio_creates_run_and_serves_generated_backend_files(tmp_path) -> None:

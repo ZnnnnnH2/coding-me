@@ -1,3 +1,5 @@
+"""负责读取并汇总规格包内容。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

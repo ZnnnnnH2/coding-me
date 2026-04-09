@@ -1,3 +1,5 @@
+"""项目的命令行启动入口。"""
+
 from codeingme.cli import main
 
 

@@ -1,3 +1,5 @@
+"""导出运行时补丁、执行与回滚工具。"""
+
 from .executor import (
     CommandResult,
     ContainerTestConfig,

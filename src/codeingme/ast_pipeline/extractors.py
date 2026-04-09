@@ -1,3 +1,5 @@
+"""从 Python AST 中提取图节点与依赖关系。"""
+
 from __future__ import annotations
 
 import ast

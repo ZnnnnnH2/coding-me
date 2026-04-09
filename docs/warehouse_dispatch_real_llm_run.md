@@ -114,7 +114,7 @@ Status: completed
 The following code changes were applied while supervising the run:
 
 - Added repository `.env` loading at CLI entry so runtime execution prefers project-local configuration.
-- Added fallback from `CODEINGME_LLM_BASE_URL` to `OPENAI_BASE_URL`.
+- At the time of this supervised run, the code still supported a temporary fallback from `CODEINGME_LLM_BASE_URL` to `OPENAI_BASE_URL`. That fallback is no longer part of the current configuration contract.
 - Added one corrective retry for structured LLM file generation when a completion times out, returns invalid JSON, omits required files, or fails validation.
 - Added timeout-aware retry instructions that explicitly ask for a more compact second response.
 - Allowed structured generation parsing to ignore optional extra file entries with empty content instead of failing the whole bundle.

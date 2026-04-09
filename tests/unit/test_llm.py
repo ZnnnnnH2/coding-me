@@ -1,3 +1,5 @@
+"""覆盖 LLM 客户端与代理接入的单元测试。"""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +15,17 @@ from codeingme.agents.qa import QAAgent
 from codeingme.contracts import APISpec, DataSchema, RequirementSpec, TestSpec as ContractTestSpec
 from codeingme.graph import GraphSlice
 from codeingme.llm import LLMCompletion, LLMConfig, RelayLLMClient
+
+
+def _config(**overrides: object) -> LLMConfig:
+    payload: dict[str, object] = {
+        "api_key": "test-key",
+        "base_url": "https://example-proxy.test/v1",
+        "model": "gpt-5.4",
+        "reasoning_effort": "medium",
+    }
+    payload.update(overrides)
+    return LLMConfig(**payload)
 
 
 def test_relay_llm_client_lists_models_and_completes() -> None:
@@ -44,7 +57,7 @@ def test_relay_llm_client_lists_models_and_completes() -> None:
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key"), transport=transport)
+    client = RelayLLMClient(_config(), transport=transport)
 
     try:
         assert client.list_models() == ["gpt-5.4", "gpt-5.3-codex"]
@@ -85,7 +98,7 @@ def test_relay_llm_client_caches_identical_prompt_responses() -> None:
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key", cache_size=8), transport=transport)
+    client = RelayLLMClient(_config(cache_size=8), transport=transport)
 
     try:
         first = client.prompt("You are a probe.", "Ping", max_tokens=32)
@@ -114,7 +127,7 @@ def test_relay_llm_client_accepts_plain_text_success_body() -> None:
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key", max_retries=1), transport=transport)
+    client = RelayLLMClient(_config(max_retries=1), transport=transport)
 
     try:
         completion = client.prompt("You are a probe.", "Ping")
@@ -171,7 +184,7 @@ def test_relay_llm_client_falls_back_to_chat_completions_when_responses_body_is_
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key", max_retries=1), transport=transport)
+    client = RelayLLMClient(_config(max_retries=1), transport=transport)
 
     try:
         completion = client.prompt("You are a probe.", "Ping", max_tokens=32)
@@ -220,7 +233,7 @@ def test_relay_llm_client_falls_back_to_streaming_responses_when_non_stream_body
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key", max_retries=1), transport=transport)
+    client = RelayLLMClient(_config(max_retries=1), transport=transport)
 
     try:
         completion = client.prompt("You are a probe.", "Ping")
@@ -282,7 +295,7 @@ def test_relay_llm_client_does_not_treat_missing_chat_content_as_string_none() -
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     transport = httpx.MockTransport(handler)
-    client = RelayLLMClient(LLMConfig(api_key="test-key", max_retries=1), transport=transport)
+    client = RelayLLMClient(_config(max_retries=1), transport=transport)
 
     try:
         with pytest.raises(RuntimeError, match="without usable text content"):
@@ -291,29 +304,37 @@ def test_relay_llm_client_does_not_treat_missing_chat_content_as_string_none() -
         client.close()
 
 
-def test_llm_config_from_env_falls_back_to_openai_base_url(monkeypatch) -> None:
-    monkeypatch.delenv("CODEINGME_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("CODEINGME_LLM_BASE_URL", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example-proxy.test/v1")
+def test_llm_config_from_env_reads_codeingme_settings(monkeypatch) -> None:
+    monkeypatch.setenv("CODEINGME_LLM_API_KEY", "project-key")
+    monkeypatch.setenv("CODEINGME_LLM_BASE_URL", "https://example-proxy.test/v1")
+    monkeypatch.setenv("CODEINGME_LLM_MODEL", "gpt-5.4")
+    monkeypatch.setenv("CODEINGME_LLM_REASONING_EFFORT", "high")
 
     config = LLMConfig.from_env()
 
     assert config is not None
-    assert config.api_key == "openai-key"
+    assert config.api_key == "project-key"
     assert config.base_url == "https://example-proxy.test/v1"
+    assert config.model == "gpt-5.4"
+    assert config.reasoning_effort == "high"
 
 
-def test_llm_config_from_env_prefers_codeingme_base_url(monkeypatch) -> None:
-    monkeypatch.delenv("CODEINGME_LLM_API_KEY", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example-proxy.test/v1")
-    monkeypatch.setenv("CODEINGME_LLM_BASE_URL", "https://project-proxy.test/v1")
+def test_llm_config_from_env_returns_none_when_unconfigured(monkeypatch) -> None:
+    for name in LLMConfig.required_env_vars():
+        monkeypatch.delenv(name, raising=False)
 
     config = LLMConfig.from_env()
 
-    assert config is not None
-    assert config.base_url == "https://project-proxy.test/v1"
+    assert config is None
+
+
+def test_llm_config_from_env_rejects_partial_required_configuration(monkeypatch) -> None:
+    monkeypatch.delenv("CODEINGME_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("CODEINGME_LLM_BASE_URL", "https://project-proxy.test/v1")
+    monkeypatch.setenv("CODEINGME_LLM_MODEL", "gpt-5.4")
+
+    with pytest.raises(RuntimeError, match="CODEINGME_LLM_API_KEY"):
+        LLMConfig.from_env()
 
 
 def test_architect_agent_uses_llm_note_when_available() -> None:

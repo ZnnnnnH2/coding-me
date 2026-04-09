@@ -1,3 +1,5 @@
+"""提供项目级 .env 文件加载能力。"""
+
 from __future__ import annotations
 
 import os
