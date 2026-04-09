@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codeingme Studio</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <article class="hero-card">
+          <div class="eyebrow">规格控制台</div>
+          <h1>Codeingme Studio</h1>
+          <p>
+            加载结构化需求、API、Schema 与业务规则输入，触发生成流程，
+            观察系统如何起草测试、生成后端模块、同步图谱并完成验证，
+            同时查看每个 Agent 的状态与产出。
+          </p>
+        </article>
+        <article class="hero-card">
+          <div class="signal-board">
+            <div class="signal">
+              <strong>当前状态</strong>
+              <span id="hero-state">接收</span>
+            </div>
+            <div class="signal">
+              <strong>运行状态</strong>
+              <span id="hero-status">空闲</span>
+            </div>
+            <div class="signal">
+              <strong>事件数量</strong>
+              <span id="hero-events">0</span>
+            </div>
+            <div class="signal">
+              <strong>生成文件</strong>
+              <span id="hero-files">0</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <main class="layout">
+        <aside class="panel spec-rail">
+          <div class="spec-rail__inner">
+            <span class="spec-rail__eyebrow">规格</span>
+            <button id="open-spec-drawer" class="spec-rail__button" type="button">展开</button>
+            <p class="spec-rail__copy">输入</p>
+          </div>
+        </aside>
+
+        <section class="panel workbench-shell">
+          <div class="panel-header">
+            <div>
+              <div class="eyebrow">运行观测</div>
+              <h2>工作台聚焦模式</h2>
+            </div>
+          </div>
+
+          <div id="state-rail" class="state-rail"></div>
+
+          <div class="workbench-toolbar">
+            <p class="panel-copy">
+              当前页面默认将展示重点让给工作台。规格输入与实时事件流可按需展开，不再长期挤占主视图空间。
+            </p>
+            <div class="button-row compact-actions">
+              <button class="button-secondary" id="open-spec-inline" type="button">规格输入</button>
+              <button class="button-secondary" id="toggle-event-drawer" type="button">实时事件流</button>
+            </div>
+          </div>
+
+          <section class="surface workbench-surface">
+            <h3>工作台</h3>
+            <div id="workbench-tabs" class="workbench-tabs">
+              <button class="workbench-tab is-active" type="button" data-panel="agent">Agent</button>
+              <button class="workbench-tab" type="button" data-panel="snapshot">快照</button>
+              <button class="workbench-tab" type="button" data-panel="cascade">Cascade</button>
+              <button class="workbench-tab" type="button" data-panel="graph">Graph</button>
+              <button class="workbench-tab" type="button" data-panel="artifact">Artifact</button>
+              <button class="workbench-tab" type="button" data-panel="files">文件</button>
+              <button class="workbench-tab" type="button" data-panel="logs">日志</button>
+            </div>
+            <div class="workbench-frame">
+              <div id="panel-agent" class="workbench-panel is-active">
+                <div class="agent-grid">
+                  <div id="agent-list" class="agent-list">
+                    <p class="panel-copy muted">
+                      启动一次运行后，你可以查看每个 Agent 的最新状态及其产出文件。
+                    </p>
+                  </div>
+                  <div id="agent-detail" class="agent-detail">
+                    <p class="panel-copy muted">
+                      选择一个 Agent，查看它的状态、上下文、产出和相关运行事件。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div id="panel-snapshot" class="workbench-panel">
+                <div id="metric-grid" class="metric-grid"></div>
+              </div>
+
+              <div id="panel-cascade" class="workbench-panel">
+                <div id="cascade-panel" class="insight-grid">
+                  <p class="panel-copy muted">
+                    启动一次运行后，这里会展示受影响节点、cascade batches 和修复计划中的角色分配。
+                  </p>
+                </div>
+              </div>
+
+              <div id="panel-graph" class="workbench-panel">
+                <div id="graph-panel" class="insight-grid">
+                  <p class="panel-copy muted">
+                    编排开始后，这里会显示 Graph 节点、同步增量和聚焦的上下文切片。
+                  </p>
+                </div>
+              </div>
+
+              <div id="panel-artifact" class="workbench-panel">
+                <div id="artifact-panel" class="artifact-grid">
+                  <p class="panel-copy muted">
+                    当前运行中各个 Agent 产出的 artifacts、routes、文件和风险说明会汇总展示在这里。
+                  </p>
+                </div>
+              </div>
+
+              <div id="panel-files" class="workbench-panel">
+                <div id="file-list" class="file-list"></div>
+                <div class="file-toolbar">
+                  <div id="file-meta" class="muted">尚未选择生成文件。</div>
+                </div>
+                <pre id="file-viewer">尚未选择生成文件。</pre>
+              </div>
+
+              <div id="panel-logs" class="workbench-panel">
+                <div class="split">
+                  <div>
+                    <label for="red-log">红测输出</label>
+                    <pre id="red-log" class="log-box">暂不可用。</pre>
+                  </div>
+                  <div>
+                    <label for="verification-log">验证输出</label>
+                    <pre id="verification-log" class="log-box">暂不可用。</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+
+      <div id="drawer-backdrop" class="drawer-backdrop"></div>
+
+      <aside id="spec-drawer" class="drawer-panel spec-drawer">
+        <div class="drawer-header">
+          <div>
+            <div class="eyebrow">规格输入</div>
+            <h2>加载结构化规格输入</h2>
+          </div>
+          <button class="button-secondary drawer-close" id="close-spec-drawer" type="button">关闭</button>
+        </div>
+
+        <div class="controls drawer-body">
+          <div class="two-up">
+            <div>
+              <label for="preset-select">示例规格包</label>
+              <select id="preset-select"></select>
+            </div>
+            <div>
+              <label for="file-loader">导入支持的文件</label>
+              <div class="dropzone">
+                <strong>拖入 OpenAPI、Schema、规则与 Story 文件</strong>
+                <span>
+                  支持的文件名：<code>openapi.yaml</code>、<code>schema.sql</code>、
+                  <code>business_rules.yaml</code>、<code>user_story.md</code>
+                </span>
+                <input id="file-loader" type="file" multiple />
+              </div>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button class="button-secondary" id="load-preset">将示例加载到编辑器</button>
+            <button class="button-secondary" id="clear-editors">清空编辑器</button>
+            <button class="button-primary" id="start-run">运行生成流程</button>
+          </div>
+
+          <div id="status-strip" class="status-strip" data-status="idle">
+            等待结构化输入。请加载示例规格包，或导入你自己的文件开始运行。
+          </div>
+
+          <section class="history-section">
+            <div class="history-header">
+              <strong>历史运行</strong>
+              <button class="button-secondary" id="refresh-history" type="button">刷新列表</button>
+            </div>
+            <div id="history-list" class="history-list">
+              <p class="panel-copy muted">当前还没有历史运行。</p>
+            </div>
+          </section>
+
+          <div class="bundle-grid">
+            <article class="bundle-card">
+              <header>
+                <strong>OpenAPI</strong>
+                <small>openapi.yaml</small>
+              </header>
+              <textarea id="openapi-input" spellcheck="false"></textarea>
+            </article>
+            <article class="bundle-card">
+              <header>
+                <strong>Schema</strong>
+                <small>schema.sql</small>
+              </header>
+              <textarea id="schema-input" spellcheck="false"></textarea>
+            </article>
+            <article class="bundle-card">
+              <header>
+                <strong>业务规则</strong>
+                <small>business_rules.yaml</small>
+              </header>
+              <textarea id="rules-input" spellcheck="false"></textarea>
+            </article>
+            <article class="bundle-card">
+              <header>
+                <strong>用户故事</strong>
+                <small>user_story.md</small>
+              </header>
+              <textarea id="story-input" spellcheck="false"></textarea>
+            </article>
+          </div>
+        </div>
+      </aside>
+
+      <aside id="event-drawer" class="drawer-panel event-drawer">
+        <div class="drawer-header">
+          <div>
+            <div class="eyebrow">运行事件</div>
+            <h2>实时事件流</h2>
+          </div>
+          <button class="button-secondary drawer-close" id="close-event-drawer" type="button">关闭</button>
+        </div>
+        <div class="drawer-body event-drawer__body">
+          <div id="event-feed" class="event-feed">
+            <div class="event-card">
+              <div class="event-meta">
+                <span class="tag" data-tone="active">空闲</span>
+              </div>
+              <strong>尚未开始运行</strong>
+              <p>启动一次运行后，这里会持续显示状态切换、Agent 活动和验证步骤。</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
