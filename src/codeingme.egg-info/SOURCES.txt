@@ -17,7 +17,6 @@ src/codeingme/agents/architect.py
 src/codeingme/agents/backend.py
 src/codeingme/agents/base.py
 src/codeingme/agents/devops.py
-src/codeingme/agents/frontend.py
 src/codeingme/agents/naming.py
 src/codeingme/agents/qa.py
 src/codeingme/ast_pipeline/__init__.py

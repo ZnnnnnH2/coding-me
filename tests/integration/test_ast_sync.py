@@ -110,10 +110,6 @@ class TaskService:
 task_service = TaskService()
 
 
-def render_home():
-    return "ok"
-
-
 @app.get("/api/tasks")
 def list_tasks():
     return {"tasks": task_service.list_tasks()}
@@ -126,13 +122,10 @@ client = TestClient(None)
 
 def test_tasks_e2e():
     response = client.get("/api/tasks")
-    home = client.get("/")
     assert response.status_code == 200
-    assert home.status_code == 200
 """
     store = GraphStore()
     store.upsert_node(GraphNode("api:get:/api/tasks", NodeKind.API_ROUTE, "GET /api/tasks", "contract"))
-    store.upsert_node(GraphNode("api:get:/", NodeKind.API_ROUTE, "GET /", "contract"))
     sync = GraphSynchronizer(store)
 
     backend_result = sync.sync_source(backend_source, file_path="demo_app/tasks_api.py")
@@ -151,11 +144,6 @@ def test_tasks_e2e():
     assert (
         "tests_generated/test_tasks_demo.py::function:test_tasks_e2e",
         "api:get:/api/tasks",
-        GraphEdgeType.VERIFIES.value,
-    ) in test_result.delta.added_edges
-    assert (
-        "tests_generated/test_tasks_demo.py::function:test_tasks_e2e",
-        "api:get:/",
         GraphEdgeType.VERIFIES.value,
     ) in test_result.delta.added_edges
     assert GraphEdge(
@@ -201,20 +189,12 @@ def _get_json(path):
     return 200, {"tasks": []}
 
 
-def _get_text(path):
-    return 200, "ok"
-
-
 def test_tasks_e2e():
     status_code, payload = _get_json("/api/tasks")
-    ui_status, html = _get_text("/")
     assert status_code == 200
-    assert ui_status == 200
-    assert html
 """
     store = GraphStore()
     store.upsert_node(GraphNode("api:get:/api/tasks", NodeKind.API_ROUTE, "GET /api/tasks", "contract"))
-    store.upsert_node(GraphNode("api:get:/", NodeKind.API_ROUTE, "GET /", "contract"))
     sync = GraphSynchronizer(store)
 
     result = sync.sync_source(source, file_path="tests_generated/test_tasks_demo.py")
@@ -222,11 +202,6 @@ def test_tasks_e2e():
     assert (
         "tests_generated/test_tasks_demo.py::function:test_tasks_e2e",
         "api:get:/api/tasks",
-        GraphEdgeType.VERIFIES.value,
-    ) in result.delta.added_edges
-    assert (
-        "tests_generated/test_tasks_demo.py::function:test_tasks_e2e",
-        "api:get:/",
         GraphEdgeType.VERIFIES.value,
     ) in result.delta.added_edges
 

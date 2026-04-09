@@ -108,7 +108,6 @@ The studio UI currently accepts the same structured files as the CLI pipeline:
 - `src/codeingme/contracts/`: internal requirement and test contracts
 - `src/codeingme/runtime/`: patch application, execution, and rollback helpers
 - `specs/`: structured specification inputs for backend module cases
-- `demo_cases/`: scenario descriptions for the research demo cases
 - `docs/`: architecture, methodology, and evaluation notes
 - `tests/`: unit, integration, and e2e coverage
 

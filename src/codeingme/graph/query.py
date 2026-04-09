@@ -18,7 +18,6 @@ class TopologyResult:
 
 class GraphQueryService:
     _impact_edge_types = {
-        GraphEdgeType.CALLS_API,
         GraphEdgeType.DEPENDS_ON,
         GraphEdgeType.VERIFIES,
         GraphEdgeType.IMPLEMENTS,
@@ -29,7 +28,6 @@ class GraphQueryService:
         GraphEdgeType.WRITES,
     }
     _task_context_outgoing_edge_types = {
-        GraphEdgeType.CALLS_API,
         GraphEdgeType.DEPENDS_ON,
         GraphEdgeType.IMPLEMENTS,
         GraphEdgeType.VERIFIES,

@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-import importlib.util
-import inspect
 from pathlib import Path
 import threading
 from typing import Callable
@@ -199,23 +196,6 @@ class StudioRunManager:
             raise FileNotFoundError(relative_path)
         return candidate.read_text(encoding="utf-8")
 
-    def render_run_preview(self, run_id: str, relative_path: str) -> str:
-        record, candidate = self._resolve_run_file(run_id, relative_path)
-        if candidate.suffix.lower() != ".html":
-            raise ValueError("预览功能仅支持生成的 HTML 文件。")
-        if not candidate.exists() or not candidate.is_file():
-            raise FileNotFoundError(relative_path)
-        rendered = self._render_html_from_workspace(record.workspace_root, relative_path)
-        if rendered is not None:
-            return rendered
-        source = candidate.read_text(encoding="utf-8")
-        if "{{ITEM_ROWS}}" in source:
-            return source.replace(
-                "{{ITEM_ROWS}}",
-                '<li data-completed="false">预览占位：当前无法获取运行时行渲染结果。</li>',
-            )
-        return source
-
     def _execute_run(self, run_id: str) -> None:
         with self._lock:
             record = self._runs[run_id]
@@ -308,58 +288,6 @@ class StudioRunManager:
         if workspace_root not in candidate.parents and candidate != workspace_root:
             raise ValueError("Requested file path escapes the workspace root.")
         return record, candidate
-
-    def _render_html_from_workspace(self, workspace_root: Path, relative_path: str) -> str | None:
-        backend_root = workspace_root / "demo_app"
-        if not backend_root.exists():
-            return None
-        template_name = Path(relative_path).name
-        for module_path in sorted(backend_root.glob("*_api.py")):
-            try:
-                module_source = module_path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            if template_name not in module_source:
-                continue
-            rendered = self._render_html_with_module(module_path)
-            if rendered is not None:
-                return rendered
-        return None
-
-    def _render_html_with_module(self, module_path: Path) -> str | None:
-        module_name = f"codeingme_studio_preview_{module_path.stem}_{uuid4().hex}"
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, module_path)
-            if spec is None or spec.loader is None:
-                return None
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        except Exception:
-            return None
-
-        renderer = getattr(module, "_render_item_list", None)
-        if callable(renderer):
-            try:
-                rendered = renderer()
-            except Exception:
-                rendered = None
-            if isinstance(rendered, str) and rendered.strip():
-                return rendered
-
-        home_handler = getattr(module, "item_list", None)
-        if not callable(home_handler):
-            return None
-        try:
-            response = home_handler()
-            if inspect.isawaitable(response):
-                response = asyncio.run(response)
-        except Exception:
-            return None
-        if isinstance(response, HTMLResponse):
-            return response.body.decode("utf-8")
-        if isinstance(response, str) and response.strip():
-            return response
-        return None
 
     def _resolve_request_files(self, payload: StudioRunRequest) -> dict[str, str]:
         if payload.preset_name:
@@ -464,17 +392,6 @@ def create_app(run_manager: StudioRunManager | None = None) -> FastAPI:
     def get_run_file(run_id: str, path: str = Query(..., min_length=1)) -> PlainTextResponse:
         try:
             return PlainTextResponse(manager.read_run_file(run_id, path))
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"Run not found: {run_id}") from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/studio/runs/{run_id}/preview", response_class=HTMLResponse)
-    def preview_run_file(run_id: str, path: str = Query(..., min_length=1)) -> HTMLResponse:
-        try:
-            return HTMLResponse(manager.render_run_preview(run_id, path))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Run not found: {run_id}") from exc
         except FileNotFoundError as exc:
@@ -1497,42 +1414,6 @@ STUDIO_HTML = """<!doctype html>
         margin-bottom: 12px;
       }
 
-      .viewer-toggle {
-        display: inline-flex;
-        gap: 8px;
-        padding: 5px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.72);
-        border: 1px solid rgba(42, 51, 49, 0.08);
-      }
-
-      .viewer-toggle button {
-        width: auto;
-        padding: 9px 14px;
-        border-radius: 999px;
-        background: transparent;
-        box-shadow: none;
-      }
-
-      .viewer-toggle button.is-active {
-        background: linear-gradient(135deg, var(--teal), #159f96);
-        color: white;
-      }
-
-      .preview-hint {
-        margin: 0 0 12px;
-        color: var(--muted);
-        line-height: 1.5;
-      }
-
-      .preview-frame {
-        width: 100%;
-        min-height: 420px;
-        border: 1px solid rgba(42, 51, 49, 0.08);
-        border-radius: 18px;
-        background: white;
-      }
-
       pre {
         margin: 0;
         padding: 14px;
@@ -1753,14 +1634,8 @@ STUDIO_HTML = """<!doctype html>
                 <div id="file-list" class="file-list"></div>
                 <div class="file-toolbar">
                   <div id="file-meta" class="muted">尚未选择生成文件。</div>
-                  <div class="viewer-toggle">
-                    <button id="source-view-button" class="is-active" type="button">源码</button>
-                    <button id="preview-view-button" type="button">预览</button>
-                  </div>
                 </div>
-                <p id="preview-hint" class="preview-hint">所有生成文件都可查看源码；只有 HTML 文件才会显示预览。</p>
                 <pre id="file-viewer">尚未选择生成文件。</pre>
-                <iframe id="file-preview" class="preview-frame" title="生成的 HTML 预览" sandbox="allow-scripts" hidden></iframe>
               </div>
 
               <div id="panel-logs" class="workbench-panel">
@@ -1913,11 +1788,7 @@ STUDIO_HTML = """<!doctype html>
       const artifactPanel = document.getElementById("artifact-panel");
       const fileList = document.getElementById("file-list");
       const fileMeta = document.getElementById("file-meta");
-      const sourceViewButton = document.getElementById("source-view-button");
-      const previewViewButton = document.getElementById("preview-view-button");
-      const previewHint = document.getElementById("preview-hint");
       const fileViewer = document.getElementById("file-viewer");
-      const filePreview = document.getElementById("file-preview");
       const redLog = document.getElementById("red-log");
       const verificationLog = document.getElementById("verification-log");
       const heroState = document.getElementById("hero-state");
@@ -1941,7 +1812,6 @@ STUDIO_HTML = """<!doctype html>
       let activeWorkbenchPanel = "agent";
       let isSpecDrawerOpen = false;
       let isEventDrawerOpen = false;
-      let viewerMode = "source";
 
       function formatStateLabel(value) {
         return {
@@ -2108,10 +1978,6 @@ STUDIO_HTML = """<!doctype html>
           throw new Error(payload.detail || response.statusText);
         }
         return response.json();
-      }
-
-      function isHtmlPath(path) {
-        return Boolean(path && path.toLowerCase().endsWith(".html"));
       }
 
       function currentFileRecord() {
@@ -2595,7 +2461,6 @@ STUDIO_HTML = """<!doctype html>
           button.addEventListener("click", async () => {
             selectedFilePath = button.dataset.path;
             activeWorkbenchPanel = "files";
-            viewerMode = "source";
             renderWorkbenchTabs();
             closeAllDrawers();
             renderAgentTrace(currentSnapshot);
@@ -2776,37 +2641,10 @@ STUDIO_HTML = """<!doctype html>
       }
 
       function syncFileViewerMode() {
-        const previewEnabled = isHtmlPath(selectedFilePath);
-        if (!previewEnabled && viewerMode === "preview") {
-          viewerMode = "source";
-        }
-        sourceViewButton.classList.toggle("is-active", viewerMode === "source");
-        previewViewButton.classList.toggle("is-active", viewerMode === "preview");
-        previewViewButton.hidden = !previewEnabled;
-        fileViewer.hidden = viewerMode !== "source";
-        filePreview.hidden = viewerMode !== "preview" || !previewEnabled;
-        if (!previewEnabled) {
-          filePreview.removeAttribute("src");
-        }
         const file = currentFileRecord();
         fileMeta.textContent = file
           ? `${file.path} · ${file.language} · ${file.size} bytes`
           : "尚未选择生成文件。";
-        if (!selectedFilePath) {
-          previewHint.textContent = "所有生成文件都可查看源码；只有 HTML 文件才会显示预览。";
-          return;
-        }
-        previewHint.textContent = previewEnabled
-          ? "可以在源码和当前运行的 HTML 预览之间切换。"
-          : "当前文件类型不支持预览，请继续使用源码视图。";
-      }
-
-      function updatePreviewFrame() {
-        if (!currentRunId || !selectedFilePath || !isHtmlPath(selectedFilePath)) {
-          filePreview.removeAttribute("src");
-          return;
-        }
-        filePreview.src = `/api/studio/runs/${currentRunId}/preview?path=${encodeURIComponent(selectedFilePath)}&updated_at=${encodeURIComponent(currentSnapshot?.updated_at || "")}`;
       }
 
       async function renderFiles(snapshot) {
@@ -2838,7 +2676,6 @@ STUDIO_HTML = """<!doctype html>
 
       async function loadSelectedFile() {
         syncFileViewerMode();
-        updatePreviewFrame();
         if (!currentRunId || !selectedFilePath) return;
         const response = await fetch(`/api/studio/runs/${currentRunId}/file?path=${encodeURIComponent(selectedFilePath)}`);
         if (!response.ok) {
@@ -2892,7 +2729,6 @@ STUDIO_HTML = """<!doctype html>
         stopPolling();
         selectedFilePath = null;
         selectedAgentRole = null;
-        viewerMode = "source";
         closeAllDrawers();
         startRunButton.disabled = true;
         setStatus("正在创建新的 Studio 运行并准备生成工作区。", "running");
@@ -2961,21 +2797,6 @@ STUDIO_HTML = """<!doctype html>
       });
 
       startRunButton.addEventListener("click", startRun);
-
-      sourceViewButton.addEventListener("click", async () => {
-        viewerMode = "source";
-        syncFileViewerMode();
-        await loadSelectedFile();
-      });
-
-      previewViewButton.addEventListener("click", () => {
-        if (!isHtmlPath(selectedFilePath)) {
-          return;
-        }
-        viewerMode = "preview";
-        syncFileViewerMode();
-        updatePreviewFrame();
-      });
 
       fileLoader.addEventListener("change", async (event) => {
         await importFiles(event.target.files);

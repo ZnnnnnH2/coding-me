@@ -24,4 +24,4 @@ The current implementation does not yet have a full typed `testgen/` or `repair/
 
 ## Compatibility Note
 
-Generated artifacts are still written into a workspace-local `demo_app/` directory because the orchestrator, tests, and graph sync logic rely on those paths today. The top-level `demo_cases/` and `specs/` directories are the research-facing entry points; `demo_app/` remains the runtime output target.
+Generated artifacts are still written into a workspace-local `demo_app/` directory because the orchestrator, tests, and graph sync logic rely on those paths today. The top-level `specs/` directory is the research-facing entry point; `demo_app/` remains the runtime output target.

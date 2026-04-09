@@ -17,13 +17,13 @@ def test_reverse_dependency_blast_radius() -> None:
     store = GraphStore()
     store.upsert_node(GraphNode("schema:task", NodeKind.DATA_MODEL, "Task", "model"))
     store.upsert_node(GraphNode("api:get:/api/tasks", NodeKind.API_ROUTE, "GET /api/tasks", "route"))
-    store.upsert_node(GraphNode("ui:task_list", NodeKind.UI_COMPONENT, "TaskList", "component"))
+    store.upsert_node(GraphNode("service:task_service", NodeKind.SERVICE, "TaskService", "service"))
     store.add_edge(GraphEdge("api:get:/api/tasks", "schema:task", GraphEdgeType.DEPENDS_ON))
-    store.add_edge(GraphEdge("ui:task_list", "api:get:/api/tasks", GraphEdgeType.CALLS_API))
+    store.add_edge(GraphEdge("service:task_service", "api:get:/api/tasks", GraphEdgeType.IMPLEMENTS))
 
     impacted = GraphQueryService(store).impacted_nodes("schema:task")
 
-    assert impacted == {"schema:task", "api:get:/api/tasks", "ui:task_list"}
+    assert impacted == {"schema:task", "api:get:/api/tasks", "service:task_service"}
 
 
 def test_graph_store_round_trips_json(tmp_path) -> None:

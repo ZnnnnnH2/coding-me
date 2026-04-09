@@ -79,15 +79,11 @@ class CascadePlanner:
             return "backend"
         if node.kind in {NodeKind.DATA_MODEL, NodeKind.API_ROUTE, NodeKind.SERVICE}:
             return "backend"
-        if node.kind is NodeKind.UI_COMPONENT:
-            return "frontend"
         if node.kind is NodeKind.TEST_CASE:
             return "qa"
         if node.kind is NodeKind.REQUIREMENT:
             return "architect"
         if node.kind is NodeKind.ARTIFACT and node.source is not None:
-            if node.source.file_path.endswith(".html"):
-                return "frontend"
             if "/test" in node.source.file_path or node.source.file_path.startswith("tests"):
                 return "qa"
         return "backend"

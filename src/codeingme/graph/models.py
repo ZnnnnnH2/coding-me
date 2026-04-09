@@ -8,7 +8,6 @@ from enum import StrEnum
 
 class NodeKind(StrEnum):
     REQUIREMENT = "requirement"
-    UI_COMPONENT = "ui_component"
     API_ROUTE = "api_route"
     SERVICE = "service"
     DATA_MODEL = "data_model"
@@ -17,7 +16,6 @@ class NodeKind(StrEnum):
 
 
 class GraphEdgeType(StrEnum):
-    CALLS_API = "calls_api"
     IMPLEMENTS = "implements"
     READS = "reads"
     WRITES = "writes"
