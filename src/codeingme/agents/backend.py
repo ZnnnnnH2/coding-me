@@ -16,11 +16,9 @@ class BackendAgent(BaseAgent):
     def run(self, context: AgentContext) -> AgentResult:
         plan = generation_plan(context)
         api_route = self._api_route(context)
-        backend_source = self._default_backend_source(context)
         artifacts: dict[str, object] = {
             "service": f"{plan.backend_module_path}::class:{self._service_class_name(context)}",
             "route": self._api_node_id(context),
-            "generation_mode": "template",
         }
         bundle, llm_artifacts = self._llm_structured_files(
             context,
@@ -62,14 +60,29 @@ class BackendAgent(BaseAgent):
             ),
         )
         artifacts.update(llm_artifacts)
-        if bundle is not None:
-            llm_source = self._file_content(bundle, plan.backend_module_path)
-            if llm_source is not None:
-                backend_source = llm_source
-            artifacts["routes"] = bundle.collections["routes"] or self._infer_routes(llm_source or "")
-            artifacts["imports"] = bundle.collections["imports"] or self._infer_imports(llm_source or "")
-            artifacts["risks"] = bundle.collections["risks"]
-            artifacts["generation_mode"] = "llm"
+        if bundle is None:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="backend module",
+                    metadata=llm_artifacts,
+                )
+            )
+
+        llm_source = self._file_content(bundle, plan.backend_module_path)
+        if llm_source is None:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="backend module",
+                    metadata={
+                        **llm_artifacts,
+                        "llm_error": f"Missing generated file content for {plan.backend_module_path}",
+                    },
+                )
+            )
+        artifacts["routes"] = bundle.collections["routes"] or self._infer_routes(llm_source)
+        artifacts["imports"] = bundle.collections["imports"] or self._infer_imports(llm_source)
+        artifacts["risks"] = bundle.collections["risks"]
+        artifacts["generation_mode"] = "llm"
 
         return AgentResult(
             role=self.role,
@@ -82,7 +95,7 @@ class BackendAgent(BaseAgent):
                         path=plan.backend_package_init_path,
                         content=f"from .{self._module_name(plan.backend_module_path)} import app\n",
                     ),
-                    FilePatch(path=plan.backend_module_path, content=backend_source),
+                    FilePatch(path=plan.backend_module_path, content=llm_source),
                 ],
             ),
         )

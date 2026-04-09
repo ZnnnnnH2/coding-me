@@ -20,7 +20,7 @@ def test_spec_summary_command_prints_parsed_bundle(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["service_name"] == "task_service"
-    assert payload["endpoints"] == ["/api/tasks", "/api/tasks/{task_id}/complete"]
+    assert payload["endpoints"] == ["/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/complete"]
 
 
 def test_demo_command_runs_orchestrator_with_spec_prompt(monkeypatch, capsys) -> None:

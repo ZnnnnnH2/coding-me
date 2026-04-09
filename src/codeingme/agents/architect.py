@@ -9,51 +9,6 @@ from codeingme.agents.base import AgentContext, AgentResult, BaseAgent
 from codeingme.contracts import APISpec, DataSchema
 
 
-_DEFAULT_FIELDS = {
-    "id": "int",
-    "title": "str",
-    "completed": "bool",
-}
-_GENERIC_WORDS = {
-    "a",
-    "an",
-    "and",
-    "app",
-    "application",
-    "board",
-    "build",
-    "completion",
-    "create",
-    "dashboard",
-    "for",
-    "list",
-    "listing",
-    "of",
-    "page",
-    "show",
-    "showing",
-    "state",
-    "status",
-    "system",
-    "the",
-    "to",
-    "used",
-    "validate",
-    "web",
-    "with",
-}
-_PLURAL_NOUNS = {
-    "items",
-    "jobs",
-    "orders",
-    "requests",
-    "shipments",
-    "tasks",
-    "tickets",
-}
-_SINGULAR_NOUNS = {noun[:-1] for noun in _PLURAL_NOUNS}
-
-
 @dataclass(slots=True)
 class _BootstrapPlan:
     schemas: list[DataSchema]
@@ -98,12 +53,7 @@ class ArchitectAgent(BaseAgent):
         if cached is not None:
             return cached
 
-        fallback = self._heuristic_bootstrap_plan(context)
-        if context.llm_client is None:
-            self._bootstrap_cache[cache_key] = fallback
-            return fallback
-
-        completion, llm_artifacts = self._llm_completion(
+        payload, llm_artifacts = self._llm_json_object(
             context,
             system_prompt=(
                 "You are the architect agent inside a state-machine-driven backend module generator. "
@@ -124,27 +74,27 @@ class ArchitectAgent(BaseAgent):
                 "- Do not include any prose outside the JSON object."
             ),
             max_tokens=700,
+            validator=self._validate_contract_payload,
         )
-        if completion is None:
-            fallback.artifacts.update(llm_artifacts)
-            self._bootstrap_cache[cache_key] = fallback
-            return fallback
-
-        payload = self._extract_json_object(completion.content)
         if payload is None:
-            fallback.artifacts.update(llm_artifacts)
-            fallback.artifacts["llm_error"] = "Model did not return a valid JSON object"
-            fallback.artifacts["llm_fallback"] = "true"
-            self._bootstrap_cache[cache_key] = fallback
-            return fallback
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="contract response",
+                    metadata=llm_artifacts,
+                )
+            )
 
-        plan = self._plan_from_payload(payload, fallback)
+        plan = self._plan_from_payload(payload)
         if plan is None:
-            fallback.artifacts.update(llm_artifacts)
-            fallback.artifacts["llm_error"] = "Generated contract response failed validation"
-            fallback.artifacts["llm_fallback"] = "true"
-            self._bootstrap_cache[cache_key] = fallback
-            return fallback
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="contract response",
+                    metadata={
+                        **llm_artifacts,
+                        "llm_error": "Generated contract response failed validation",
+                    },
+                )
+            )
 
         plan.artifacts.update(llm_artifacts)
         plan.artifacts["generation_mode"] = "llm"
@@ -161,7 +111,10 @@ class ArchitectAgent(BaseAgent):
             llm_marker = f"llm:{model}:{id(context.llm_client)}"
         return f"{llm_marker}|{context.requirement.title}|{context.requirement.summary}|{criteria}"
 
-    def _plan_from_payload(self, payload: dict[str, object], fallback: _BootstrapPlan) -> _BootstrapPlan | None:
+    def _validate_contract_payload(self, payload: dict[str, object]) -> str | None:
+        return None if self._plan_from_payload(payload) is not None else "Generated contract response failed validation"
+
+    def _plan_from_payload(self, payload: dict[str, object]) -> _BootstrapPlan | None:
         schemas_data = payload.get("schemas")
         apis_data = payload.get("apis")
         if not isinstance(schemas_data, list) or not schemas_data:
@@ -196,10 +149,10 @@ class ArchitectAgent(BaseAgent):
         if response_schema_name != schema_name:
             response_schema_name = schema_name
 
-        summary = str(primary_api_data.get("summary", "")).strip() or fallback.apis[0].summary
+        summary = str(primary_api_data.get("summary", "")).strip() or f"GET {route}"
         design_note = str(payload.get("design_note", "")).strip() or str(payload.get("summary", "")).strip()
         if not design_note:
-            design_note = fallback.design_note
+            design_note = f"Use {schema_name} as the primary contract for {route}."
 
         return _BootstrapPlan(
             schemas=[DataSchema(name=schema_name, fields=fields)],
@@ -214,51 +167,6 @@ class ArchitectAgent(BaseAgent):
             design_note=design_note,
             artifacts={"generation_mode": "llm"},
         )
-
-    def _heuristic_bootstrap_plan(self, context: AgentContext) -> _BootstrapPlan:
-        entity_words, singular_noun, plural_noun = self._primary_entity(context.requirement.summary)
-        schema_name = self._pascal_case([*entity_words, singular_noun])
-        route = "/api/" + self._kebab_case([*entity_words, plural_noun])
-        label = " ".join([*entity_words, plural_noun]).strip()
-        summary = f"List {label}" if label else f"List {plural_noun}"
-        design_note = (
-            f"Use {schema_name} as the primary contract and expose GET {route} "
-            "so downstream agents stay aligned on a single list-oriented resource."
-        )
-        return _BootstrapPlan(
-            schemas=[DataSchema(name=schema_name, fields=dict(_DEFAULT_FIELDS))],
-            apis=[
-                APISpec(
-                    route=route,
-                    method="GET",
-                    summary=summary,
-                    response_schema=schema_name,
-                )
-            ],
-            design_note=design_note,
-            artifacts={"generation_mode": "heuristic"},
-        )
-
-    def _primary_entity(self, requirement_text: str) -> tuple[list[str], str, str]:
-        tokens = [token for token in re.findall(r"[A-Za-z]+", requirement_text.lower()) if token]
-        filtered = [token for token in tokens if token not in _GENERIC_WORDS]
-        if not filtered:
-            return [], "task", "tasks"
-
-        noun_index = next(
-            (
-                index
-                for index, token in enumerate(filtered)
-                if token in _PLURAL_NOUNS or token in _SINGULAR_NOUNS
-            ),
-            len(filtered) - 1,
-        )
-        noun = filtered[noun_index]
-        singular_noun = self._singularize(noun)
-        plural_noun = self._pluralize(noun)
-        prefixes = [token for token in filtered[:noun_index] if token not in _SINGULAR_NOUNS and token not in _PLURAL_NOUNS]
-        entity_words = prefixes[-2:]
-        return entity_words, singular_noun, plural_noun
 
     def _normalize_schema_name(self, value: object) -> str | None:
         if not isinstance(value, str):
@@ -278,8 +186,14 @@ class ArchitectAgent(BaseAgent):
             if not field_name or not field_type:
                 return None
             normalized[field_name] = field_type
-        for key, value in _DEFAULT_FIELDS.items():
-            normalized[key] = value
+        required_fields = {
+            "id": "int",
+            "title": "str",
+            "completed": "bool",
+        }
+        for key, value in required_fields.items():
+            if normalized.get(key) != value:
+                return None
         return normalized
 
     def _normalize_route(self, value: object) -> str | None:
@@ -293,32 +207,6 @@ class ArchitectAgent(BaseAgent):
         if not route.startswith("/api/"):
             return None
         return route.rstrip("/") or "/api"
-
-    def _singularize(self, noun: str) -> str:
-        if noun.endswith("ies") and len(noun) > 3:
-            return noun[:-3] + "y"
-        if noun.endswith("s") and len(noun) > 1:
-            return noun[:-1]
-        return noun
-
-    def _pluralize(self, noun: str) -> str:
-        if noun.endswith("y") and len(noun) > 1:
-            return noun[:-1] + "ies"
-        if noun.endswith("s"):
-            return noun
-        return noun + "s"
-
-    def _pascal_case(self, parts: list[str]) -> str:
-        cleaned = [part for part in parts if part]
-        if not cleaned:
-            return "Task"
-        return "".join(part[:1].upper() + part[1:] for part in cleaned)
-
-    def _kebab_case(self, parts: list[str]) -> str:
-        cleaned = [part for part in parts if part]
-        if not cleaned:
-            return "tasks"
-        return "-".join(cleaned)
 
     def _field_summary(self, schema: DataSchema) -> str:
         return ", ".join(f"{key}:{value}" for key, value in schema.fields.items())

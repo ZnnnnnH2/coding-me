@@ -1,0 +1,611 @@
+openapi: 3.1.0
+info:
+  title: Return Request Service API
+  version: 1.0.0
+  description: Manage customer return requests from submission through review, warehouse receipt, and closure.
+tags:
+  - name: Return Requests
+    description: Multi-step after-sales workflow operations.
+paths:
+  /api/return-requests:
+    get:
+      tags:
+        - Return Requests
+      summary: List return requests
+      description: Returns return request headers for operational tracking.
+      operationId: listReturnRequests
+      responses:
+        "200":
+          description: Return requests returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestListResponse"
+              examples:
+                default:
+                  value:
+                    return_requests:
+                      - id: 501
+                        request_number: RR-2026-0001
+                        order_id: ORD-90311
+                        customer_id: CUST-1008
+                        status: approved
+                        reason_code: damaged
+                        requested_at: "2026-04-09T08:00:00Z"
+                        item_count: 2
+                      - id: 502
+                        request_number: RR-2026-0002
+                        order_id: ORD-90315
+                        customer_id: CUST-1012
+                        status: submitted
+                        reason_code: wrong_item
+                        requested_at: "2026-04-09T08:20:00Z"
+                        item_count: 1
+                    total: 2
+    post:
+      tags:
+        - Return Requests
+      summary: Create a return request
+      description: Creates a submitted return request with one or more line items.
+      operationId: createReturnRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnRequestCreateRequest"
+            examples:
+              default:
+                value:
+                  order_id: ORD-90311
+                  customer_id: CUST-1008
+                  reason_code: damaged
+                  requested_by: Mina
+                  notes: Customer reported dented packaging on delivery.
+                  items:
+                    - sku: SKU-RED-MUG
+                      product_title: Ceramic Mug - Red
+                      requested_quantity: 2
+                      unit_price_cents: 1599
+                      line_reason_text: Two units arrived chipped.
+                    - sku: SKU-TRAY-BLK
+                      product_title: Serving Tray - Black
+                      requested_quantity: 1
+                      unit_price_cents: 2599
+                      line_reason_text: Surface scratched on arrival.
+      responses:
+        "201":
+          description: Return request created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestDetail"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/return-requests/{request_id}:
+    get:
+      tags:
+        - Return Requests
+      summary: Get return request detail
+      description: Returns the latest header state together with all return lines.
+      operationId: getReturnRequest
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Return request returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestDetail"
+              examples:
+                approved:
+                  value:
+                    id: 501
+                    request_number: RR-2026-0001
+                    order_id: ORD-90311
+                    customer_id: CUST-1008
+                    status: approved
+                    reason_code: damaged
+                    requested_by: Mina
+                    requested_at: "2026-04-09T08:00:00Z"
+                    review_decision: approved
+                    review_note: Damage photos were sufficient for approval.
+                    reviewed_by: Leo
+                    reviewed_at: "2026-04-09T09:15:00Z"
+                    warehouse_receipt_no: null
+                    received_by: null
+                    received_at: null
+                    closed_by: null
+                    closed_at: null
+                    close_note: null
+                    items:
+                      - id: 9001
+                        sku: SKU-RED-MUG
+                        product_title: Ceramic Mug - Red
+                        unit_price_cents: 1599
+                        requested_quantity: 2
+                        approved_quantity: 2
+                        received_quantity: 0
+                        line_status: approved
+                        line_reason_text: Two units arrived chipped.
+                      - id: 9002
+                        sku: SKU-TRAY-BLK
+                        product_title: Serving Tray - Black
+                        unit_price_cents: 2599
+                        requested_quantity: 1
+                        approved_quantity: 1
+                        received_quantity: 0
+                        line_status: approved
+                        line_reason_text: Surface scratched on arrival.
+        "404":
+          description: Return request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/return-requests/{request_id}/review:
+    patch:
+      tags:
+        - Return Requests
+      summary: Review a return request
+      description: Approves or rejects a submitted return request.
+      operationId: reviewReturnRequest
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnRequestReviewRequest"
+            examples:
+              approve:
+                value:
+                  decision: approved
+                  reviewed_by: Leo
+                  review_note: Damage photos were sufficient for approval.
+              reject:
+                value:
+                  decision: rejected
+                  reviewed_by: Leo
+                  review_note: Request was outside the return window.
+      responses:
+        "200":
+          description: Review applied successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestDetail"
+        "404":
+          description: Return request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Illegal state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/return-requests/{request_id}/receive:
+    patch:
+      tags:
+        - Return Requests
+      summary: Record warehouse receipt
+      description: Records which approved quantities were physically received by the warehouse.
+      operationId: receiveReturnRequest
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnRequestReceiveRequest"
+            examples:
+              default:
+                value:
+                  received_by: Chen
+                  warehouse_receipt_no: WHR-2026-221
+                  items:
+                    - item_id: 9001
+                      received_quantity: 2
+                    - item_id: 9002
+                      received_quantity: 1
+      responses:
+        "200":
+          description: Receipt recorded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestDetail"
+        "404":
+          description: Return request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Illegal state transition or inconsistent quantity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/return-requests/{request_id}/close:
+    patch:
+      tags:
+        - Return Requests
+      summary: Close a return request
+      description: Closes a fully received return request.
+      operationId: closeReturnRequest
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnRequestCloseRequest"
+            examples:
+              default:
+                value:
+                  closed_by: Suri
+                  close_note: All approved quantities were received and matched inspection.
+      responses:
+        "200":
+          description: Request closed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReturnRequestDetail"
+        "404":
+          description: Return request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Illegal state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    ReturnRequestSummary:
+      type: object
+      required:
+        - id
+        - request_number
+        - order_id
+        - customer_id
+        - status
+        - reason_code
+        - requested_at
+        - item_count
+      properties:
+        id:
+          type: integer
+        request_number:
+          type: string
+        order_id:
+          type: string
+        customer_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - submitted
+            - approved
+            - rejected
+            - received
+            - closed
+        reason_code:
+          type: string
+          enum:
+            - damaged
+            - wrong_item
+            - not_as_described
+            - customer_remorse
+        requested_at:
+          type: string
+          format: date-time
+        item_count:
+          type: integer
+          minimum: 1
+    ReturnRequestItem:
+      type: object
+      required:
+        - id
+        - sku
+        - product_title
+        - unit_price_cents
+        - requested_quantity
+        - received_quantity
+        - line_status
+      properties:
+        id:
+          type: integer
+        sku:
+          type: string
+        product_title:
+          type: string
+        unit_price_cents:
+          type: integer
+          minimum: 0
+        requested_quantity:
+          type: integer
+          minimum: 1
+        approved_quantity:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        received_quantity:
+          type: integer
+          minimum: 0
+        line_status:
+          type: string
+          enum:
+            - submitted
+            - approved
+            - rejected
+            - received
+            - closed
+        line_reason_text:
+          type:
+            - string
+            - "null"
+    ReturnRequestDetail:
+      type: object
+      required:
+        - id
+        - request_number
+        - order_id
+        - customer_id
+        - status
+        - reason_code
+        - requested_by
+        - requested_at
+        - items
+      properties:
+        id:
+          type: integer
+        request_number:
+          type: string
+        order_id:
+          type: string
+        customer_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - submitted
+            - approved
+            - rejected
+            - received
+            - closed
+        reason_code:
+          type: string
+          enum:
+            - damaged
+            - wrong_item
+            - not_as_described
+            - customer_remorse
+        requested_by:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        review_decision:
+          type:
+            - string
+            - "null"
+          enum:
+            - approved
+            - rejected
+            - "null"
+        review_note:
+          type:
+            - string
+            - "null"
+        reviewed_by:
+          type:
+            - string
+            - "null"
+        reviewed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        warehouse_receipt_no:
+          type:
+            - string
+            - "null"
+        received_by:
+          type:
+            - string
+            - "null"
+        received_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        closed_by:
+          type:
+            - string
+            - "null"
+        closed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        close_note:
+          type:
+            - string
+            - "null"
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReturnRequestItem"
+    ReturnRequestListResponse:
+      type: object
+      required:
+        - return_requests
+        - total
+      properties:
+        return_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReturnRequestSummary"
+        total:
+          type: integer
+          minimum: 0
+    ReturnRequestCreateItem:
+      type: object
+      required:
+        - sku
+        - product_title
+        - requested_quantity
+        - unit_price_cents
+      properties:
+        sku:
+          type: string
+        product_title:
+          type: string
+        requested_quantity:
+          type: integer
+          minimum: 1
+        unit_price_cents:
+          type: integer
+          minimum: 0
+        line_reason_text:
+          type:
+            - string
+            - "null"
+    ReturnRequestCreateRequest:
+      type: object
+      required:
+        - order_id
+        - customer_id
+        - reason_code
+        - requested_by
+        - items
+      properties:
+        order_id:
+          type: string
+        customer_id:
+          type: string
+        reason_code:
+          type: string
+          enum:
+            - damaged
+            - wrong_item
+            - not_as_described
+            - customer_remorse
+        requested_by:
+          type: string
+        notes:
+          type:
+            - string
+            - "null"
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReturnRequestCreateItem"
+    ReturnRequestReviewRequest:
+      type: object
+      required:
+        - decision
+        - reviewed_by
+      properties:
+        decision:
+          type: string
+          enum:
+            - approved
+            - rejected
+        reviewed_by:
+          type: string
+        review_note:
+          type:
+            - string
+            - "null"
+    ReturnRequestReceiveItem:
+      type: object
+      required:
+        - item_id
+        - received_quantity
+      properties:
+        item_id:
+          type: integer
+          minimum: 1
+        received_quantity:
+          type: integer
+          minimum: 0
+    ReturnRequestReceiveRequest:
+      type: object
+      required:
+        - received_by
+        - warehouse_receipt_no
+        - items
+      properties:
+        received_by:
+          type: string
+        warehouse_receipt_no:
+          type: string
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReturnRequestReceiveItem"
+    ReturnRequestCloseRequest:
+      type: object
+      required:
+        - closed_by
+      properties:
+        closed_by:
+          type: string
+        close_note:
+          type:
+            - string
+            - "null"
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: string
+          example: invalid_state_transition
+        message:
+          type: string
+          example: Return request 501 cannot be received while still in submitted status.

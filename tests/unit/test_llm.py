@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ def _config(**overrides: object) -> LLMConfig:
         "base_url": "https://example-proxy.test/v1",
         "model": "gpt-5.4",
         "reasoning_effort": "medium",
+        "generation_max_attempts": 3,
     }
     payload.update(overrides)
     return LLMConfig(**payload)
@@ -309,6 +311,7 @@ def test_llm_config_from_env_reads_codeingme_settings(monkeypatch) -> None:
     monkeypatch.setenv("CODEINGME_LLM_BASE_URL", "https://example-proxy.test/v1")
     monkeypatch.setenv("CODEINGME_LLM_MODEL", "gpt-5.4")
     monkeypatch.setenv("CODEINGME_LLM_REASONING_EFFORT", "high")
+    monkeypatch.setenv("CODEINGME_LLM_GENERATION_MAX_ATTEMPTS", "5")
 
     config = LLMConfig.from_env()
 
@@ -317,6 +320,7 @@ def test_llm_config_from_env_reads_codeingme_settings(monkeypatch) -> None:
     assert config.base_url == "https://example-proxy.test/v1"
     assert config.model == "gpt-5.4"
     assert config.reasoning_effort == "high"
+    assert config.generation_max_attempts == 5
 
 
 def test_llm_config_from_env_returns_none_when_unconfigured(monkeypatch) -> None:
@@ -446,33 +450,15 @@ def test_architect_agent_bootstrap_specs_use_requirement_specific_llm_contracts(
     ]
 
 
-def test_architect_agent_bootstrap_specs_fall_back_to_requirement_heuristics() -> None:
+def test_architect_agent_requires_llm_client() -> None:
     requirement = RequirementSpec(
         title="Build a warehouse dispatch tasks backend module",
         summary="Build a warehouse dispatch tasks backend module with listing and completion state",
         acceptance_criteria=["List warehouse dispatch tasks"],
     )
     context = AgentContext(requirement=requirement, graph_slice=GraphSlice())
-    agent = ArchitectAgent()
-
-    result = agent.run(context)
-    schemas, apis = agent.bootstrap_specs(context)
-
-    assert result.artifacts["generation_mode"] == "heuristic"
-    assert schemas == [
-        DataSchema(
-            name="WarehouseDispatchTask",
-            fields={"id": "int", "title": "str", "completed": "bool"},
-        )
-    ]
-    assert apis == [
-        APISpec(
-            route="/api/warehouse-dispatch-tasks",
-            method="GET",
-            summary="List warehouse dispatch tasks",
-            response_schema="WarehouseDispatchTask",
-        )
-    ]
+    with pytest.raises(RuntimeError, match="architect agent failed to generate valid contract response"):
+        ArchitectAgent().run(context)
 
 
 def test_backend_agent_uses_llm_generated_bundle() -> None:
@@ -974,11 +960,8 @@ def test_backend_agent_falls_back_on_invalid_json_response() -> None:
         def prompt(self, system_prompt: str, user_prompt: str, **_: object) -> LLMCompletion:
             return LLMCompletion(model="fake-model", content="not json")
 
-    result = BackendAgent().run(_agent_context(FakeLLMClient()))
-
-    assert result.artifacts["generation_mode"] == "template"
-    assert result.artifacts["llm_fallback"] == "true"
-    assert "valid JSON object" in result.artifacts["llm_error"]
+    with pytest.raises(RuntimeError, match="backend agent failed to generate valid backend module"):
+        BackendAgent().run(_agent_context(FakeLLMClient()))
 
 
 def test_backend_agent_retries_after_invalid_json_response() -> None:
@@ -1037,7 +1020,23 @@ def test_backend_agent_retries_after_invalid_json_response() -> None:
     assert result.artifacts["llm_attempt_records"][1]["kind"] == "retry"
 
 
-def test_backend_agent_falls_back_when_required_file_is_missing() -> None:
+def test_backend_agent_respects_configured_generation_attempts() -> None:
+    calls = {"count": 0}
+
+    class FakeLLMClient:
+        config = SimpleNamespace(generation_max_attempts=4)
+
+        def prompt(self, system_prompt: str, user_prompt: str, **_: object) -> LLMCompletion:
+            calls["count"] += 1
+            return LLMCompletion(model="fake-model", content="not json")
+
+    with pytest.raises(RuntimeError, match="after 4 attempt\\(s\\)"):
+        BackendAgent().run(_agent_context(FakeLLMClient()))
+
+    assert calls["count"] == 4
+
+
+def test_backend_agent_fails_when_required_file_is_missing() -> None:
     class FakeLLMClient:
         def prompt(self, system_prompt: str, user_prompt: str, **_: object) -> LLMCompletion:
             return LLMCompletion(
@@ -1059,29 +1058,20 @@ def test_backend_agent_falls_back_when_required_file_is_missing() -> None:
                 ),
             )
 
-    result = BackendAgent().run(_agent_context(FakeLLMClient()))
-
-    assert result.artifacts["generation_mode"] == "template"
-    assert result.artifacts["llm_fallback"] == "true"
-    assert "missing required files" in result.artifacts["llm_error"]
+    with pytest.raises(RuntimeError, match="missing required files"):
+        BackendAgent().run(_agent_context(FakeLLMClient()))
 
 
-def test_qa_agent_falls_back_to_template_on_llm_error() -> None:
+def test_qa_agent_fails_on_llm_error() -> None:
     class BrokenLLMClient:
         def prompt(self, system_prompt: str, user_prompt: str, **_: object) -> LLMCompletion:
             raise RuntimeError("relay unavailable")
 
-    result = QAAgent().run(_agent_context(BrokenLLMClient()), _tests())
-
-    assert result.artifacts["generation_mode"] == "template"
-    assert result.artifacts["llm_fallback"] == "true"
-    assert "relay unavailable" in result.artifacts["llm_error"]
-    assert result.file_plan is not None
-    assert "def test_task_contract()" in result.file_plan.patches[0].content
-    assert "from demo_app.tasks_api import app" in result.file_plan.patches[0].content
+    with pytest.raises(RuntimeError, match="relay unavailable"):
+        QAAgent().run(_agent_context(BrokenLLMClient()), _tests())
 
 
-def test_devops_agent_falls_back_on_invalid_generated_bundle() -> None:
+def test_devops_agent_fails_on_invalid_generated_bundle() -> None:
     class FakeLLMClient:
         def prompt(self, system_prompt: str, user_prompt: str, **_: object) -> LLMCompletion:
             return LLMCompletion(
@@ -1113,11 +1103,8 @@ def test_devops_agent_falls_back_on_invalid_generated_bundle() -> None:
                 ),
             )
 
-    result = DevOpsAgent().run(_agent_context(FakeLLMClient()))
-
-    assert result.artifacts["generation_mode"] == "template"
-    assert result.artifacts["llm_fallback"] == "true"
-    assert "failed validation" in result.artifacts["llm_error"]
+    with pytest.raises(RuntimeError, match="failed validation"):
+        DevOpsAgent().run(_agent_context(FakeLLMClient()))
 
 
 def _agent_context(

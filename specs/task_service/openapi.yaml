@@ -1,14 +1,262 @@
 openapi: 3.1.0
 info:
   title: Task Service API
-  version: 0.1.0
-  description: Manage task records with completion state and contract-focused verification.
+  version: 1.0.0
+  description: Manage team tasks with stable read and completion contracts.
+tags:
+  - name: Tasks
+    description: Single-entity task workflow operations.
 paths:
   /api/tasks:
     get:
-      summary: List all tasks
+      tags:
+        - Tasks
+      summary: List tasks
+      description: Returns the current task list with the latest completion state.
+      operationId: listTasks
+      responses:
+        "200":
+          description: Tasks returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskListResponse"
+              examples:
+                default:
+                  value:
+                    tasks:
+                      - id: 1
+                        title: Prepare weekly metrics
+                        description: Compile KPI summary for Friday review.
+                        owner: Alice
+                        priority: high
+                        due_date: "2026-04-11"
+                        completed: false
+                        created_at: "2026-04-09T08:00:00Z"
+                        completed_at: null
+                        updated_at: "2026-04-09T08:00:00Z"
+                      - id: 2
+                        title: Archive last sprint notes
+                        description: Move approved notes into the team knowledge base.
+                        owner: Bob
+                        priority: normal
+                        due_date: null
+                        completed: true
+                        created_at: "2026-04-08T15:00:00Z"
+                        completed_at: "2026-04-09T07:30:00Z"
+                        updated_at: "2026-04-09T07:30:00Z"
+                    total: 2
     post:
+      tags:
+        - Tasks
       summary: Create a task
+      description: Creates a new task in an incomplete state.
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreateRequest"
+            examples:
+              default:
+                value:
+                  title: Prepare weekly metrics
+                  description: Compile KPI summary for Friday review.
+                  owner: Alice
+                  priority: high
+                  due_date: "2026-04-11"
+      responses:
+        "201":
+          description: Task created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/tasks/{task_id}:
+    get:
+      tags:
+        - Tasks
+      summary: Get task detail
+      description: Returns one task with its latest completion state.
+      operationId: getTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Task returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/tasks/{task_id}/complete:
     patch:
+      tags:
+        - Tasks
       summary: Mark a task as complete
+      description: Marks a task complete. Repeating the same completion request is idempotent.
+      operationId: completeTask
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCompleteRequest"
+            examples:
+              default:
+                value:
+                  completed_by: Alice
+                  completion_note: KPI summary uploaded to the review folder.
+      responses:
+        "200":
+          description: Task is now complete or was already complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    Task:
+      type: object
+      required:
+        - id
+        - title
+        - owner
+        - priority
+        - completed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        description:
+          type:
+            - string
+            - "null"
+        owner:
+          type: string
+          minLength: 1
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+        due_date:
+          type:
+            - string
+            - "null"
+          format: date
+        completed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TaskListResponse:
+      type: object
+      required:
+        - tasks
+        - total
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        total:
+          type: integer
+          minimum: 0
+    TaskCreateRequest:
+      type: object
+      required:
+        - title
+        - owner
+        - priority
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        description:
+          type:
+            - string
+            - "null"
+        owner:
+          type: string
+          minLength: 1
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+        due_date:
+          type:
+            - string
+            - "null"
+          format: date
+    TaskCompleteRequest:
+      type: object
+      required:
+        - completed_by
+      properties:
+        completed_by:
+          type: string
+          minLength: 1
+        completion_note:
+          type:
+            - string
+            - "null"
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: string
+          example: task_not_found
+        message:
+          type: string
+          example: Task 999 was not found.

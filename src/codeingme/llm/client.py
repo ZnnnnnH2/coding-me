@@ -20,6 +20,7 @@ REQUIRED_LLM_ENV_VARS = (
 )
 DEFAULT_TIMEOUT = 90.0
 DEFAULT_MAX_RETRIES = 2
+DEFAULT_GENERATION_MAX_ATTEMPTS = 3
 
 
 @dataclass(slots=True)
@@ -34,6 +35,7 @@ class LLMConfig:
     cache_enabled: bool = True
     cache_size: int = 256
     max_retries: int = DEFAULT_MAX_RETRIES
+    generation_max_attempts: int = DEFAULT_GENERATION_MAX_ATTEMPTS
 
     @classmethod
     def from_env(cls) -> LLMConfig | None:
@@ -57,6 +59,15 @@ class LLMConfig:
             cache_enabled=os.getenv("CODEINGME_LLM_CACHE_ENABLED", "1") != "0",
             cache_size=int(os.getenv("CODEINGME_LLM_CACHE_SIZE", "256")),
             max_retries=max(1, int(os.getenv("CODEINGME_LLM_MAX_RETRIES", str(DEFAULT_MAX_RETRIES)))),
+            generation_max_attempts=max(
+                1,
+                int(
+                    os.getenv(
+                        "CODEINGME_LLM_GENERATION_MAX_ATTEMPTS",
+                        str(DEFAULT_GENERATION_MAX_ATTEMPTS),
+                    )
+                ),
+            ),
         )
 
     @classmethod

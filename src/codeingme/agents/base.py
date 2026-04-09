@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
+import os
 import re
 from typing import Any
 
@@ -64,7 +65,10 @@ class BaseAgent:
         max_tokens: int,
     ) -> tuple[LLMCompletion | None, dict[str, object]]:
         if context.llm_client is None:
-            return None, {}
+            return None, {
+                "llm_error": "LLM generation requires a configured llm_client.",
+                "llm_fallback": "true",
+            }
         try:
             completion = context.llm_client.prompt(
                 system_prompt,
@@ -79,6 +83,74 @@ class BaseAgent:
             "llm_cached": "true" if completion.cached else "false",
         }
 
+    def _llm_json_object(
+        self,
+        context: AgentContext,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        validator: Callable[[dict[str, Any]], str | None] | None = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, object]]:
+        if context.llm_client is None:
+            return None, {
+                "llm_error": "LLM generation requires a configured llm_client.",
+                "llm_fallback": "true",
+                "llm_attempts": "0",
+                "llm_attempt_records": [],
+            }
+
+        current_user_prompt = user_prompt
+        attempt_records: list[dict[str, object]] = []
+        last_metadata: dict[str, object] = {}
+        for attempt in range(self._generation_max_attempts(context)):
+            completion, metadata = self._llm_completion(
+                context,
+                system_prompt=system_prompt,
+                user_prompt=current_user_prompt,
+                max_tokens=max_tokens,
+            )
+            metadata["llm_attempts"] = str(attempt + 1)
+            attempt_record: dict[str, object] = {
+                "attempt": attempt + 1,
+                "kind": "retry" if attempt > 0 else "initial",
+                "model": metadata.get("llm_model"),
+                "cached": metadata.get("llm_cached") == "true",
+                "success": False,
+            }
+            if completion is None:
+                attempt_record["error"] = metadata.get("llm_error")
+                attempt_records.append(attempt_record)
+                last_metadata = metadata
+            else:
+                payload = self._extract_json_object(completion.content)
+                error = "Model did not return a valid JSON object"
+                if payload is not None:
+                    error = validator(payload) if validator is not None else None
+                    if error is None:
+                        metadata["llm_response_format"] = "json-object"
+                        attempt_record["success"] = True
+                        attempt_record["response_format"] = "json-object"
+                        attempt_records.append(attempt_record)
+                        metadata["llm_attempt_records"] = attempt_records
+                        return payload, metadata
+                metadata["llm_error"] = error
+                metadata["llm_fallback"] = "true"
+                attempt_record["error"] = error
+                attempt_records.append(attempt_record)
+                last_metadata = metadata
+
+            if attempt + 1 < self._generation_max_attempts(context):
+                current_user_prompt = self._retry_user_prompt(
+                    user_prompt,
+                    last_metadata.get("llm_error", "Unknown generation failure"),
+                )
+
+        last_metadata["llm_attempt_records"] = attempt_records
+        if "llm_attempts" not in last_metadata:
+            last_metadata["llm_attempts"] = str(len(attempt_records))
+        return None, last_metadata
+
     def _llm_structured_files(
         self,
         context: AgentContext,
@@ -91,12 +163,17 @@ class BaseAgent:
         validator: Callable[[StructuredGenerationBundle], bool] | None = None,
     ) -> tuple[StructuredGenerationBundle | None, dict[str, object]]:
         if context.llm_client is None:
-            return None, {}
+            return None, {
+                "llm_error": "LLM generation requires a configured llm_client.",
+                "llm_fallback": "true",
+                "llm_attempts": "0",
+                "llm_attempt_records": [],
+            }
 
         current_user_prompt = user_prompt
         attempt_records: list[dict[str, object]] = []
         last_metadata: dict[str, object] = {}
-        for attempt in range(2):
+        for attempt in range(self._generation_max_attempts(context)):
             completion, metadata = self._llm_completion(
                 context,
                 system_prompt=system_prompt,
@@ -139,11 +216,34 @@ class BaseAgent:
                 attempt_records.append(attempt_record)
                 last_metadata = metadata
 
-            if attempt == 0:
-                current_user_prompt = self._retry_user_prompt(user_prompt, last_metadata.get("llm_error", "Unknown generation failure"))
+            if attempt + 1 < self._generation_max_attempts(context):
+                current_user_prompt = self._retry_user_prompt(
+                    user_prompt,
+                    last_metadata.get("llm_error", "Unknown generation failure"),
+                )
 
         last_metadata["llm_attempt_records"] = attempt_records
         return None, last_metadata
+
+    @staticmethod
+    def _generation_max_attempts(context: AgentContext) -> int:
+        configured = getattr(getattr(context.llm_client, "config", None), "generation_max_attempts", None)
+        if configured is not None:
+            return max(1, int(configured))
+        return max(1, int(os.getenv("CODEINGME_LLM_GENERATION_MAX_ATTEMPTS", "3")))
+
+    def _llm_generation_failure_message(
+        self,
+        *,
+        output_kind: str,
+        metadata: dict[str, object],
+    ) -> str:
+        attempts = metadata.get("llm_attempts", "0")
+        error = metadata.get("llm_error", "Unknown generation failure")
+        return (
+            f"{self.role} agent failed to generate valid {output_kind} via LLM "
+            f"after {attempts} attempt(s): {error}"
+        )
 
     def _parse_structured_bundle(
         self,

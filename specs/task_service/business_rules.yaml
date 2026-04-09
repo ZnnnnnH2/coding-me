@@ -1,4 +1,17 @@
-rules:
-  - Tasks must expose their completion state through the API response.
-  - Completing an unknown task must return a client-visible error.
+validation_rules:
+  - `title` is required after trimming and must be between 3 and 120 characters.
+  - `owner` is required for task creation.
+  - `priority` must be one of `low`, `normal`, or `high`.
+
+workflow_rules:
+  - Newly created tasks must start with `completed = false` and `completed_at = null`.
+  - Completing an unknown task must return a client-visible `404` error.
+  - Completing an already completed task must return `200` and preserve the original `completed_at` timestamp.
+
+read_model_rules:
+  - Task list and task detail endpoints must both expose the latest `completed` and `completed_at` values.
   - Task listing must remain available after completion updates.
+
+ordering_rules:
+  - Open tasks should appear before completed tasks in the default list response.
+  - Within the same completion group, tasks should be ordered by `due_date` ascending and then `created_at` ascending.

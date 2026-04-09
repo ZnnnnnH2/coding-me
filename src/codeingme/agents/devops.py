@@ -12,14 +12,10 @@ class DevOpsAgent(BaseAgent):
 
     def run(self, context: AgentContext) -> AgentResult:
         module_ref = f"demo_app.{self._backend_module_name(context)}:app"
-        dockerfile = self._default_dockerfile(context)
-        compose_file = self._default_compose_file(context)
-        dockerignore = self._default_dockerignore()
         artifacts: dict[str, object] = {
             "docker": "docker compose up app",
             "ci": "docker compose run --rm test python -m pytest tests_generated",
             "compose_service": "test",
-            "generation_mode": "template",
         }
         bundle, llm_artifacts = self._llm_structured_files(
             context,
@@ -60,20 +56,31 @@ class DevOpsAgent(BaseAgent):
             validator=self._is_valid_devops_bundle,
         )
         artifacts.update(llm_artifacts)
-        if bundle is not None:
-            llm_dockerfile = self._file_content(bundle, "Dockerfile")
-            llm_compose = self._file_content(bundle, "docker-compose.yml")
-            llm_dockerignore = self._file_content(bundle, ".dockerignore")
-            if llm_dockerfile is not None:
-                dockerfile = llm_dockerfile
-            if llm_compose is not None:
-                compose_file = llm_compose
-            if llm_dockerignore is not None:
-                dockerignore = llm_dockerignore
-            artifacts["services"] = bundle.collections["services"]
-            artifacts["commands"] = bundle.collections["commands"]
-            artifacts["risks"] = bundle.collections["risks"]
-            artifacts["generation_mode"] = "llm"
+        if bundle is None:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="devops bundle",
+                    metadata=llm_artifacts,
+                )
+            )
+
+        dockerfile = self._file_content(bundle, "Dockerfile")
+        compose_file = self._file_content(bundle, "docker-compose.yml")
+        dockerignore = self._file_content(bundle, ".dockerignore")
+        if not dockerfile or not compose_file or not dockerignore:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="devops bundle",
+                    metadata={
+                        **llm_artifacts,
+                        "llm_error": "Generated devops bundle is missing one or more required files",
+                    },
+                )
+            )
+        artifacts["services"] = bundle.collections["services"]
+        artifacts["commands"] = bundle.collections["commands"]
+        artifacts["risks"] = bundle.collections["risks"]
+        artifacts["generation_mode"] = "llm"
 
         return AgentResult(
             role=self.role,

@@ -77,9 +77,9 @@ Specification bundles live under `specs/` and currently accept:
 
 Included example spec bundles:
 
-- `specs/task_service/`
-- `specs/order_service/`
-- `specs/warehouse_dispatch/`
+- `specs/warehouse_dispatch/` for the simple read-model demo
+- `specs/task_service/` for the medium single-entity workflow demo
+- `specs/return_request_service/` for the hard multi-step workflow demo
 
 These directories are example structured inputs, not hardcoded generation modes.
 
@@ -137,6 +137,12 @@ This repository is still an early-stage research prototype. The current implemen
 
 LLM relay settings are loaded from `.env`. Copy `.env.example` to `.env` and fill in the required values before running LLM-backed commands. The client no longer uses built-in provider defaults for base URL or model.
 
+Generation is now LLM-only:
+
+- architect, qa, backend, and devops stages all require valid LLM output
+- invalid structured output is retried for a configurable number of attempts
+- there is no heuristic or template fallback path after generation retries are exhausted
+
 ```dotenv
 CODEINGME_ENABLE_LLM=1
 CODEINGME_LLM_API_KEY=...
@@ -148,6 +154,7 @@ CODEINGME_LLM_TIMEOUT=90
 CODEINGME_LLM_CACHE_ENABLED=1
 CODEINGME_LLM_CACHE_SIZE=256
 CODEINGME_LLM_MAX_RETRIES=2
+CODEINGME_LLM_GENERATION_MAX_ATTEMPTS=3
 ```
 
 If your machine needs the local proxy from environment variables:

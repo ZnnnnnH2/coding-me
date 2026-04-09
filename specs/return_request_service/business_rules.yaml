@@ -1,0 +1,22 @@
+validation_rules:
+  - Creating a return request requires at least one line item.
+  - Every line item must have `requested_quantity > 0`.
+  - `approved_quantity` may not exceed `requested_quantity`.
+  - `received_quantity` may not exceed `approved_quantity`.
+
+workflow_rules:
+  - New requests start in `submitted` status.
+  - Only `submitted` requests may be reviewed.
+  - Review decisions may transition the request only to `approved` or `rejected`.
+  - Rejected requests are terminal and may not be received or closed.
+  - Only `approved` requests may move to `received`.
+  - A request may move to `closed` only after all approved quantities have been fully received.
+
+read_model_rules:
+  - The detail endpoint must return both the request header and all line items in one payload.
+  - The list endpoint must expose the latest request status and item count.
+  - Request detail must preserve review, receipt, and closure timestamps once they exist.
+
+error_rules:
+  - Unknown request IDs must return `404`.
+  - Illegal state transitions must return `409` with a structured error payload.

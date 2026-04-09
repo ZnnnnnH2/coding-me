@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import copy
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ from codeingme.agents import ArchitectAgent, BackendAgent, DevOpsAgent, QAAgent
 from codeingme.agents.base import AgentContext, AgentResult
 from codeingme.agents.naming import generation_plan
 from codeingme.ast_pipeline import GraphSynchronizer
-from codeingme.contracts import AcceptanceTestGenerator, RequirementSpec
+from codeingme.contracts import APISpec, AcceptanceTestGenerator, DataSchema, RequirementSpec, TestSpec
 from codeingme.graph import (
     GraphEdge,
     GraphEdgeType,
@@ -107,6 +108,7 @@ class CodeingmeOrchestrator:
         requirement_text: str,
         event_callback: EventCallback | None = None,
     ) -> OrchestrationResult:
+        self._ensure_llm_client()
         self.store = GraphStore()
         self.slice_builder = GraphSliceBuilder(self.store)
         self.graph_sync = GraphSynchronizer(self.store)
@@ -168,6 +170,23 @@ class CodeingmeOrchestrator:
             details={
                 "schemas": [getattr(schema, "name", "") for schema in schemas],
                 "apis": [f"{getattr(api, 'method', '')} {getattr(api, 'route', '')}" for api in apis],
+                "schemas_data": [
+                    {
+                        "name": getattr(schema, "name", ""),
+                        "fields": dict(getattr(schema, "fields", {})),
+                    }
+                    for schema in schemas
+                ],
+                "apis_data": [
+                    {
+                        "route": getattr(api, "route", ""),
+                        "method": getattr(api, "method", ""),
+                        "summary": getattr(api, "summary", ""),
+                        "request_schema": getattr(api, "request_schema", None),
+                        "response_schema": getattr(api, "response_schema", None),
+                    }
+                    for api in apis
+                ],
             },
         )
         self._transition(
@@ -420,6 +439,407 @@ class CodeingmeOrchestrator:
             red_test_output=red_test_result.output,
             verification_output=verification_result.output,
         )
+
+    def resume(
+        self,
+        requirement_text: str,
+        *,
+        resume_from: ExecutionState | str,
+        schemas_data: list[dict[str, object]] | None = None,
+        apis_data: list[dict[str, object]] | None = None,
+        generated_tests_data: list[dict[str, object]] | None = None,
+        prior_artifacts: dict[str, dict[str, object]] | None = None,
+        red_test_output: str = "",
+        event_callback: EventCallback | None = None,
+    ) -> OrchestrationResult:
+        self._ensure_llm_client()
+        resume_state = resume_from if isinstance(resume_from, ExecutionState) else ExecutionState(resume_from)
+        self.store = GraphStore.load_json(self.graph_path) if self.graph_path.exists() else GraphStore()
+        self.slice_builder = GraphSliceBuilder(self.store)
+        self.graph_sync = GraphSynchronizer(self.store)
+        self.rollback = RollbackManager()
+
+        requirement = self._requirement_spec(requirement_text)
+        requirement_node = GraphNode(
+            node_id="requirement:root",
+            kind=NodeKind.REQUIREMENT,
+            name=requirement.title,
+            summary=requirement.summary,
+        )
+        self.store.upsert_node(requirement_node)
+
+        prior_artifacts = copy.deepcopy(prior_artifacts or {})
+        schemas = [DataSchema(name=item["name"], fields=dict(item["fields"])) for item in (schemas_data or [])]
+        apis = [
+            APISpec(
+                route=item["route"],
+                method=item["method"],
+                summary=item.get("summary", "") or f"{item['method']} {item['route']}",
+                request_schema=item.get("request_schema"),
+                response_schema=item.get("response_schema"),
+            )
+            for item in (apis_data or [])
+        ]
+        generated_tests = [
+            TestSpec(
+                name=item["name"],
+                description=item.get("description", ""),
+                expected_state=item.get("expected_state", "green"),
+                path=item.get("path"),
+            )
+            for item in (generated_tests_data or [])
+        ]
+
+        self._emit(
+            event_callback,
+            stage="run",
+            status="started",
+            state="intake",
+            message=f"Resuming the run from {resume_state.value}.",
+            details={"requirement": requirement_text, "resume_from": resume_state.value},
+        )
+
+        if resume_state is ExecutionState.CONTRACT_GENERATION:
+            self.state_machine = StateMachine()
+            return self.run(requirement_text, event_callback=event_callback)
+
+        if not schemas or not apis:
+            raise RuntimeError("Resume requires persisted contract data from a completed contract_generation stage.")
+
+        self._sync_contract_nodes(schemas, apis)
+        plan = generation_plan(
+            AgentContext(
+                requirement=requirement,
+                graph_slice=self.slice_builder.from_node_ids({"requirement:root"}),
+                apis=apis,
+                schemas=schemas,
+                llm_client=self.llm_client,
+            )
+        )
+        if not generated_tests:
+            generated_tests = self.test_generator.generate(plan.plural_slug)
+
+        architect_artifacts = prior_artifacts.get("architect") or self._architect_artifacts_from_contracts(schemas, apis)
+        qa_artifacts = prior_artifacts.get("qa") or self._qa_artifacts_from_tests(generated_tests)
+        architect_result = AgentResult(role="architect", summary="Resumed from persisted contract state", artifacts=architect_artifacts)
+        qa_result = AgentResult(role="qa", summary="Resumed from persisted test state", artifacts=qa_artifacts, tests=generated_tests)
+
+        changed_node_id = self._schema_node_id(schemas[0])
+        test_targets = self._test_targets(generated_tests)
+        qa_context = AgentContext(
+            requirement=requirement,
+            graph_slice=self.slice_builder.from_node_ids({node.node_id for node in self.store.nodes()}),
+            apis=apis,
+            schemas=schemas,
+            llm_client=self.llm_client,
+        )
+
+        if resume_state is ExecutionState.TEST_RED:
+            self._prime_state_machine(ExecutionState.CONTRACT_GENERATION)
+            self._transition(
+                ExecutionState.TEST_RED,
+                event_callback,
+                "Resuming from test_red and regenerating red tests before implementation.",
+            )
+            qa_result = self._run_agent(
+                "qa",
+                qa_context,
+                lambda: self.qa.run(qa_context, generated_tests),
+                event_callback,
+                start_message="Regenerating red tests and harnesses for the target backend module.",
+            )
+            test_targets = self._test_targets(generated_tests)
+            self._apply_and_checkpoint("test_red", qa_result.file_plan)
+            self._emit(
+                event_callback,
+                stage="patch",
+                status="completed",
+                state=self.state_machine.state.value,
+                role="qa",
+                message="Applied regenerated red-test patches to the run workspace.",
+                details={"patch_count": self._patch_count(qa_result.file_plan)},
+            )
+            self._emit(
+                event_callback,
+                stage="tests",
+                status="started",
+                state=self.state_machine.state.value,
+                message="Running generated acceptance tests to confirm the workspace is red before implementation.",
+                details={"targets": test_targets},
+            )
+            red_test_result = self.executor.run_tests(
+                test_targets,
+                cwd=self.workspace_root,
+                container=self._test_execution_config(),
+            )
+            self._emit(
+                event_callback,
+                stage="tests",
+                status="expected_failure" if not red_test_result.success else "unexpected_pass",
+                state=self.state_machine.state.value,
+                message=(
+                    "Red test phase behaved as expected and the generated tests failed before implementation."
+                    if not red_test_result.success
+                    else "Generated acceptance tests passed unexpectedly before implementation."
+                ),
+                details={
+                    "command": red_test_result.command,
+                    "returncode": red_test_result.returncode,
+                },
+            )
+            if red_test_result.success:
+                raise RuntimeError("Generated acceptance tests were expected to fail before implementation")
+            red_test_output = red_test_result.output
+            prior_artifacts["qa"] = qa_result.artifacts
+        else:
+            self._prime_state_machine(ExecutionState.TEST_RED)
+
+        self._transition(
+            ExecutionState.IMPLEMENTATION_LOOP,
+            event_callback,
+            "Implementation agents are now generating backend and devops assets.",
+        )
+        backend_result = self._run_agent(
+            "backend",
+            qa_context,
+            lambda: self.backend.run(qa_context),
+            event_callback,
+            start_message="Backend agent is generating the FastAPI service and API contract surface.",
+        )
+        devops_result = self._run_agent(
+            "devops",
+            qa_context,
+            lambda: self.devops.run(qa_context),
+            event_callback,
+            start_message="DevOps agent is preparing container and runtime wiring for the generated module.",
+        )
+        implementation_plan = self._combine_plans(
+            "implementation",
+            [backend_result.file_plan, devops_result.file_plan],
+        )
+        implementation_plan = self._compact_plan_for_apply(implementation_plan)
+        self._apply_and_checkpoint("implementation", implementation_plan)
+        self._emit(
+            event_callback,
+            stage="patch",
+            status="completed",
+            state=self.state_machine.state.value,
+            message="Applied implementation patches from backend and devops agents.",
+            details={"patch_count": self._patch_count(implementation_plan)},
+        )
+        self._transition(
+            ExecutionState.GRAPH_SYNC,
+            event_callback,
+            "Synchronizing generated Python files back into the graph model.",
+        )
+
+        graph_sync_results = self._sync_generated_python_files([qa_result.file_plan, implementation_plan])
+        self._sync_runtime_nodes(qa_context, backend_result)
+        self._emit(
+            event_callback,
+            stage="graph_sync",
+            status="completed",
+            state=self.state_machine.state.value,
+            message="Graph synchronization finished for the latest generated runtime files.",
+            details={
+                "synced_files": self._python_patch_count([qa_result.file_plan, implementation_plan]),
+                "added_nodes": sum(len(result.delta.added_nodes) for result in graph_sync_results),
+                "removed_nodes": sum(len(result.delta.removed_nodes) for result in graph_sync_results),
+            },
+        )
+        self._transition(
+            ExecutionState.CASCADE_UPDATE,
+            event_callback,
+            "Planner is executing graph-aware cascade updates for impacted backend and QA nodes.",
+        )
+
+        planner = CascadePlanner(self.store)
+        blast_radius = planner.blast_radius(changed_node_id)
+        cascade_plan = planner.execution_plan(changed_node_id)
+        backend_result, cascade_sync_results = self._execute_cascade_plan(
+            cascade_plan,
+            requirement=requirement,
+            schemas=schemas,
+            apis=apis,
+            generated_tests=generated_tests,
+            backend_result=backend_result,
+            event_callback=event_callback,
+        )
+        cascade_order = cascade_plan.ordered_node_ids
+        context_slice = planner.context_slice(changed_node_id, max_hops=1)
+        self._emit(
+            event_callback,
+            stage="cascade",
+            status="completed",
+            state=self.state_machine.state.value,
+            message="Cascade update batches finished and the focused graph slice is ready for final verification.",
+            details={
+                "blast_radius": blast_radius,
+                "batches": cascade_plan.batches,
+            },
+        )
+        self._transition(
+            ExecutionState.VERIFICATION,
+            event_callback,
+            "Running final verification tests against the generated backend module.",
+        )
+        self._emit(
+            event_callback,
+            stage="tests",
+            status="started",
+            state=self.state_machine.state.value,
+            message="Executing verification suite for the generated backend module.",
+            details={"targets": test_targets},
+        )
+        verification_result = self.executor.run_tests(
+            test_targets,
+            cwd=self.workspace_root,
+            container=self._test_execution_config(),
+        )
+        if not verification_result.success:
+            self._emit(
+                event_callback,
+                stage="tests",
+                status="failed",
+                state=self.state_machine.state.value,
+                message="Verification failed. Rolling the workspace back to the latest safe checkpoint.",
+                details={
+                    "command": verification_result.command,
+                    "returncode": verification_result.returncode,
+                },
+            )
+            self._transition(
+                ExecutionState.ROLLBACK,
+                event_callback,
+                "Rollback manager is restoring the workspace after a failed verification pass.",
+            )
+            restored = self.rollback.restore(self.workspace_root)
+            if restored is not None and "graph" in restored.state_snapshot:
+                self.store = GraphStore.from_dict(restored.state_snapshot["graph"])
+                self.slice_builder = GraphSliceBuilder(self.store)
+                self.graph_sync = GraphSynchronizer(self.store)
+            self.store.save_json(self.graph_path)
+            raise RuntimeError(
+                f"Verification failed; latest checkpoint={restored.name if restored else 'none'}\n"
+                f"{verification_result.output}"
+            )
+        self._emit(
+            event_callback,
+            stage="tests",
+            status="completed",
+            state=self.state_machine.state.value,
+            message="Verification suite passed and the generated backend module is accepted.",
+            details={
+                "command": verification_result.command,
+                "returncode": verification_result.returncode,
+            },
+        )
+        self._transition(
+            ExecutionState.DONE,
+            event_callback,
+            "Run completed successfully. Generated backend artifacts are ready to inspect.",
+        )
+        self.store.save_json(self.graph_path)
+
+        return OrchestrationResult(
+            requirement=requirement_text,
+            final_state=self.state_machine.state.value,
+            states=[state.value for state in self.state_machine.history] + [self.state_machine.state.value],
+            graph_nodes=sorted(node.node_id for node in self.store.nodes()),
+            blast_radius=blast_radius,
+            cascade_order=cascade_order,
+            cascade_batches=cascade_plan.batches,
+            cascade_tasks=cascade_plan.tasks,
+            context_slice_nodes=sorted(context_slice.node_ids()),
+            graph_sync_added=sorted(
+                {
+                    node_id
+                    for result in [*graph_sync_results, *cascade_sync_results]
+                    for node_id in result.delta.added_nodes
+                }
+            ),
+            graph_sync_removed=sorted(
+                {
+                    node_id
+                    for result in [*graph_sync_results, *cascade_sync_results]
+                    for node_id in result.delta.removed_nodes
+                }
+            ),
+            artifacts={
+                architect_result.role: architect_result.artifacts,
+                qa_result.role: {
+                    **qa_result.artifacts,
+                    "test_expectations": {
+                        test.name: test.expected_state for test in qa_result.tests
+                    },
+                },
+                backend_result.role: backend_result.artifacts,
+                devops_result.role: devops_result.artifacts,
+            },
+            workspace_root=str(self.workspace_root),
+            graph_path=str(self.graph_path),
+            red_test_output=red_test_output,
+            verification_output=verification_result.output,
+        )
+
+    def _ensure_llm_client(self) -> None:
+        if self.llm_client is not None:
+            return
+        if os.getenv("CODEINGME_ENABLE_LLM") == "1":
+            self.llm_client = RelayLLMClient.from_env()
+        if self.llm_client is None:
+            raise RuntimeError(
+                "LLM-only generation requires a configured llm_client or "
+                "CODEINGME_ENABLE_LLM=1 with valid CODEINGME_LLM_* settings."
+            )
+
+    def _requirement_spec(self, requirement_text: str) -> RequirementSpec:
+        return RequirementSpec(
+            title=requirement_text,
+            summary=requirement_text,
+            acceptance_criteria=["Generate contracts", "Drive red-to-green flow", "Propagate impacted changes"],
+        )
+
+    def _prime_state_machine(self, current_state: ExecutionState) -> None:
+        self.state_machine = StateMachine()
+        order = [
+            ExecutionState.INTAKE,
+            ExecutionState.CONTRACT_GENERATION,
+            ExecutionState.TEST_RED,
+            ExecutionState.IMPLEMENTATION_LOOP,
+            ExecutionState.GRAPH_SYNC,
+            ExecutionState.CASCADE_UPDATE,
+            ExecutionState.VERIFICATION,
+        ]
+        if current_state not in order:
+            return
+        for state in order[1 : order.index(current_state) + 1]:
+            self.state_machine.transition(state)
+
+    def _architect_artifacts_from_contracts(
+        self,
+        schemas: list[DataSchema],
+        apis: list[APISpec],
+    ) -> dict[str, object]:
+        if not schemas or not apis:
+            return {}
+        schema = schemas[0]
+        api = apis[0]
+        return {
+            "openapi": f"{api.method} {api.route}",
+            "schema": f"{schema.name}: {', '.join(f'{key}:{value}' for key, value in schema.fields.items())}",
+            "generation_mode": "llm",
+        }
+
+    def _qa_artifacts_from_tests(self, tests: list[TestSpec]) -> dict[str, object]:
+        test_file = tests[0].path if tests else None
+        return {
+            "test_file": test_file,
+            "generation_mode": "llm",
+            "test_expectations": {
+                test.name: test.expected_state for test in tests
+            },
+        }
 
     def _checkpoint_state(self) -> dict[str, object]:
         return {
@@ -757,6 +1177,8 @@ class CodeingmeOrchestrator:
                 ],
                 "generation_mode": result.artifacts.get("generation_mode"),
                 "patch_diffs": self._patch_diffs(result.file_plan),
+                "artifact": result.artifacts,
+                "tests": [asdict(test) for test in result.tests],
             },
         )
         return result

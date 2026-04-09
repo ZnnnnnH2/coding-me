@@ -1,4 +1,15 @@
-rules:
-  - Warehouse dispatch tasks must expose their completion state through the API response.
-  - Completed dispatch tasks must remain visible in the queue for shift handoff review.
-  - The dispatch queue endpoint must stay readable even when some tasks are already complete.
+validation_rules:
+  - The queue response must expose each task's `completed` flag.
+  - A completed task must include `completed_at`; an open task must not.
+
+read_model_rules:
+  - Completed dispatch tasks must remain visible in the queue during shift handoff review.
+  - The queue endpoint must return an object with `warehouse_dispatch_tasks` and `summary`.
+
+ordering_rules:
+  - Queue items must be sorted with `urgent` priority before `normal`.
+  - Within the same priority, earlier `scheduled_departure_at` values must appear first.
+
+consistency_rules:
+  - `summary.total` must equal the number of returned tasks.
+  - `summary.open` and `summary.completed` must match the returned task states.

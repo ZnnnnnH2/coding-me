@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import threading
 from typing import Callable
@@ -17,6 +18,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .orchestrator import CodeingmeOrchestrator, OrchestrationEvent
+from .orchestrator.state_machine import ExecutionState
 from .spec_parser import load_spec_bundle
 
 
@@ -105,13 +107,26 @@ class StudioRunManager:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="codeingme-studio")
         self._runs: dict[str, StudioRunRecord] = {}
         self._lock = threading.Lock()
+        self._load_runs_from_disk()
+
+    def list_runs(self) -> list[dict[str, object]]:
+        with self._lock:
+            records = sorted(
+                self._runs.values(),
+                key=lambda record: record.updated_at,
+                reverse=True,
+            )
+            return [self._run_summary(record) for record in records]
 
     def list_presets(self) -> list[dict[str, object]]:
         if not self.specs_root.exists():
             return []
         presets: list[dict[str, object]] = []
         for spec_dir in sorted(path for path in self.specs_root.iterdir() if path.is_dir()):
-            bundle = load_spec_bundle(spec_dir)
+            try:
+                bundle = load_spec_bundle(spec_dir)
+            except FileNotFoundError:
+                continue
             presets.append(
                 {
                     "name": spec_dir.name,
@@ -176,6 +191,7 @@ class StudioRunManager:
         )
         with self._lock:
             self._runs[run_id] = record
+            self._persist_record(record)
 
         if self.run_inline:
             self._execute_run(run_id)
@@ -183,12 +199,45 @@ class StudioRunManager:
             self._executor.submit(self._execute_run, run_id)
         return self.get_run(run_id)
 
+    def resume_run(self, run_id: str) -> dict[str, object]:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                raise KeyError(run_id)
+            resume_from_state = self._resume_from_state(record)
+            if record.status != "failed" or resume_from_state is None:
+                raise ValueError("Only failed runs with resumable state can be resumed.")
+            record.status = "queued"
+            record.updated_at = _utc_now()
+            record.current_message = f"准备从 {resume_from_state} 继续运行。"
+            record.error = None
+            record.events.append(
+                {
+                    "sequence": len(record.events) + 1,
+                    "timestamp": _utc_now(),
+                    "stage": "run",
+                    "status": "queued",
+                    "message": f"Queued a resume request from {resume_from_state}.",
+                    "state": record.current_state,
+                    "role": None,
+                    "batch": None,
+                    "details": {"resume_from": resume_from_state},
+                }
+            )
+            self._persist_record(record)
+
+        if self.run_inline:
+            self._execute_resume(run_id)
+        else:
+            self._executor.submit(self._execute_resume, run_id)
+        return self.get_run(run_id)
+
     def get_run(self, run_id: str) -> dict[str, object]:
         with self._lock:
             record = self._runs.get(run_id)
             if record is None:
                 raise KeyError(run_id)
-            return record.to_dict()
+            return self._run_payload(record)
 
     def read_run_file(self, run_id: str, relative_path: str) -> str:
         _, candidate = self._resolve_run_file(run_id, relative_path)
@@ -201,6 +250,8 @@ class StudioRunManager:
             record = self._runs[run_id]
             record.status = "running"
             record.updated_at = _utc_now()
+            record.error = None
+            self._persist_record(record)
         self._append_manual_event(
             record,
             stage="run",
@@ -208,6 +259,7 @@ class StudioRunManager:
             message="Studio launched a dedicated generation workspace for this run.",
             state="intake",
         )
+        self._persist_record(record)
 
         def on_event(event: OrchestrationEvent) -> None:
             payload = asdict(event)
@@ -219,6 +271,7 @@ class StudioRunManager:
                 current.current_message = event.message
                 if event.state is not None:
                     current.current_state = event.state
+                self._persist_record(current)
 
         try:
             orchestrator = self.orchestrator_factory(record.workspace_root)
@@ -232,6 +285,8 @@ class StudioRunManager:
                 current.current_message = "运行已成功完成。"
                 current.result = asdict(result)
                 current.files = files
+                current.error = None
+                self._persist_record(current)
         except Exception as exc:
             files = self._collect_workspace_files(record.workspace_root)
             with self._lock:
@@ -254,6 +309,91 @@ class StudioRunManager:
                         "details": {},
                     }
                 )
+                self._persist_record(current)
+
+    def _execute_resume(self, run_id: str) -> None:
+        with self._lock:
+            record = self._runs[run_id]
+            resume_from_state = self._resume_from_state(record)
+            if resume_from_state is None:
+                raise ValueError("Resume state is unavailable for this run.")
+            resume_payload = self._resume_payload(record)
+            record.status = "running"
+            record.updated_at = _utc_now()
+            record.current_message = f"正在从 {resume_from_state} 继续运行。"
+            record.error = None
+            self._persist_record(record)
+
+        self._append_manual_event(
+            record,
+            stage="run",
+            status="started",
+            message=f"Studio is resuming this run from {resume_from_state}.",
+            state=record.current_state,
+        )
+        self._persist_record(record)
+
+        def on_event(event: OrchestrationEvent) -> None:
+            payload = asdict(event)
+            with self._lock:
+                current = self._runs[run_id]
+                payload["sequence"] = len(current.events) + 1
+                current.events.append(payload)
+                current.updated_at = _utc_now()
+                current.current_message = event.message
+                if event.state is not None:
+                    current.current_state = event.state
+                self._persist_record(current)
+
+        try:
+            orchestrator = self.orchestrator_factory(record.workspace_root)
+            if resume_from_state == ExecutionState.CONTRACT_GENERATION.value:
+                result = orchestrator.run(record.requirement, event_callback=on_event)
+            else:
+                result = orchestrator.resume(
+                    record.requirement,
+                    resume_from=resume_from_state,
+                    schemas_data=resume_payload["schemas_data"],
+                    apis_data=resume_payload["apis_data"],
+                    generated_tests_data=resume_payload["generated_tests_data"],
+                    prior_artifacts=resume_payload["artifacts"],
+                    red_test_output=resume_payload.get("red_test_output", ""),
+                    event_callback=on_event,
+                )
+            files = self._collect_workspace_files(record.workspace_root)
+            with self._lock:
+                current = self._runs[run_id]
+                current.status = "succeeded"
+                current.updated_at = _utc_now()
+                current.current_state = result.final_state
+                current.current_message = "运行已成功完成。"
+                current.result = asdict(result)
+                current.files = files
+                current.error = None
+                self._persist_record(current)
+        except Exception as exc:
+            files = self._collect_workspace_files(record.workspace_root)
+            with self._lock:
+                current = self._runs[run_id]
+                current.status = "failed"
+                current.updated_at = _utc_now()
+                current.current_message = str(exc)
+                current.error = str(exc)
+                current.files = files
+                current.events.append(
+                    {
+                        "sequence": len(current.events) + 1,
+                        "timestamp": _utc_now(),
+                        "stage": "run",
+                        "status": "failed",
+                        "message": str(exc),
+                        "state": current.current_state,
+                        "role": None,
+                        "batch": None,
+                        "details": {"resume": True},
+                    }
+                )
+                self._persist_record(current)
 
     def _append_manual_event(
         self,
@@ -333,6 +473,135 @@ class StudioRunManager:
             )
         return files
 
+    def _record_storage_payload(self, record: StudioRunRecord) -> dict[str, object]:
+        return {
+            **record.to_dict(),
+            "run_root": str(record.run_root),
+            "spec_dir": str(record.spec_dir),
+        }
+
+    def _persist_record(self, record: StudioRunRecord) -> None:
+        payload = self._record_storage_payload(record)
+        target = record.run_root / "run.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def _load_runs_from_disk(self) -> None:
+        if not self.run_root.exists():
+            return
+        for run_dir in sorted(path for path in self.run_root.iterdir() if path.is_dir()):
+            payload_path = run_dir / "run.json"
+            if not payload_path.exists():
+                continue
+            try:
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            try:
+                record = StudioRunRecord(
+                    run_id=payload["run_id"],
+                    status=payload["status"],
+                    created_at=payload["created_at"],
+                    updated_at=payload["updated_at"],
+                    current_state=payload["current_state"],
+                    current_message=payload["current_message"],
+                    requirement=payload["requirement"],
+                    bundle=dict(payload.get("bundle", {})),
+                    run_root=Path(payload.get("run_root", run_dir)),
+                    workspace_root=Path(payload.get("workspace_root", run_dir / "workspace")),
+                    spec_dir=Path(payload.get("spec_dir", run_dir / "spec_bundle")),
+                    events=list(payload.get("events", [])),
+                    result=payload.get("result"),
+                    error=payload.get("error"),
+                    files=list(payload.get("files", [])),
+                )
+            except KeyError:
+                continue
+            self._runs[record.run_id] = record
+
+    def _run_payload(self, record: StudioRunRecord) -> dict[str, object]:
+        resume_from_state = self._resume_from_state(record)
+        payload = record.to_dict()
+        payload["resume_supported"] = record.status == "failed" and resume_from_state is not None
+        payload["resume_from_state"] = resume_from_state
+        return payload
+
+    def _run_summary(self, record: StudioRunRecord) -> dict[str, object]:
+        resume_from_state = self._resume_from_state(record)
+        return {
+            "run_id": record.run_id,
+            "status": record.status,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "current_state": record.current_state,
+            "current_message": record.current_message,
+            "requirement": record.requirement,
+            "bundle": copy.deepcopy(record.bundle),
+            "error": record.error,
+            "file_count": len(record.files),
+            "resume_supported": record.status == "failed" and resume_from_state is not None,
+            "resume_from_state": resume_from_state,
+        }
+
+    def _resume_from_state(self, record: StudioRunRecord) -> str | None:
+        mapping = {
+            ExecutionState.CONTRACT_GENERATION.value: ExecutionState.CONTRACT_GENERATION.value,
+            ExecutionState.TEST_RED.value: ExecutionState.TEST_RED.value,
+            ExecutionState.IMPLEMENTATION_LOOP.value: ExecutionState.IMPLEMENTATION_LOOP.value,
+            ExecutionState.GRAPH_SYNC.value: ExecutionState.IMPLEMENTATION_LOOP.value,
+            ExecutionState.CASCADE_UPDATE.value: ExecutionState.IMPLEMENTATION_LOOP.value,
+            ExecutionState.VERIFICATION.value: ExecutionState.IMPLEMENTATION_LOOP.value,
+            ExecutionState.ROLLBACK.value: ExecutionState.IMPLEMENTATION_LOOP.value,
+        }
+        candidate = mapping.get(record.current_state)
+        if candidate is None:
+            return None
+        payload = self._resume_payload(record)
+        if candidate == ExecutionState.CONTRACT_GENERATION.value:
+            return candidate
+        if candidate == ExecutionState.TEST_RED.value and payload["schemas_data"] and payload["apis_data"]:
+            return candidate
+        if (
+            candidate == ExecutionState.IMPLEMENTATION_LOOP.value
+            and payload["schemas_data"]
+            and payload["apis_data"]
+            and payload["generated_tests_data"]
+        ):
+            return candidate
+        return None
+
+    def _resume_payload(self, record: StudioRunRecord) -> dict[str, object]:
+        schemas_data: list[dict[str, object]] = []
+        apis_data: list[dict[str, object]] = []
+        generated_tests_data: list[dict[str, object]] = []
+        artifacts: dict[str, dict[str, object]] = {}
+
+        for event in record.events:
+            details = event.get("details", {})
+            if event.get("stage") == "contracts" and event.get("status") == "completed":
+                schemas_data = copy.deepcopy(details.get("schemas_data", []))
+                apis_data = copy.deepcopy(details.get("apis_data", []))
+            if event.get("stage") == "agent" and event.get("status") == "completed":
+                role = event.get("role")
+                artifact = details.get("artifact")
+                if role and isinstance(artifact, dict):
+                    artifacts[role] = copy.deepcopy(artifact)
+                if role == "qa":
+                    generated_tests_data = copy.deepcopy(details.get("tests", []))
+
+        if record.result and isinstance(record.result.get("artifacts"), dict):
+            for role, artifact in record.result["artifacts"].items():
+                if isinstance(role, str) and isinstance(artifact, dict):
+                    artifacts[role] = copy.deepcopy(artifact)
+
+        return {
+            "schemas_data": schemas_data,
+            "apis_data": apis_data,
+            "generated_tests_data": generated_tests_data,
+            "artifacts": artifacts,
+            "red_test_output": record.result.get("red_test_output", "") if record.result else "",
+        }
+
 
 def _language_for_path(path: Path) -> str:
     suffix = path.suffix.lower()
@@ -367,6 +636,10 @@ def create_app(run_manager: StudioRunManager | None = None) -> FastAPI:
     def list_presets() -> dict[str, object]:
         return {"presets": manager.list_presets()}
 
+    @app.get("/api/studio/runs")
+    def list_runs() -> dict[str, object]:
+        return {"runs": manager.list_runs()}
+
     @app.get("/api/studio/presets/{preset_name}")
     def get_preset(preset_name: str) -> dict[str, object]:
         try:
@@ -379,6 +652,15 @@ def create_app(run_manager: StudioRunManager | None = None) -> FastAPI:
         try:
             return manager.create_run(payload)
         except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/studio/runs/{run_id}/resume")
+    def resume_run(run_id: str) -> dict[str, object]:
+        try:
+            return manager.resume_run(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Run not found: {run_id}") from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/studio/runs/{run_id}")
@@ -1405,6 +1687,65 @@ STUDIO_HTML = """<!doctype html>
         color: white;
       }
 
+      .history-section {
+        display: grid;
+        gap: 12px;
+        margin: 18px 0 22px;
+      }
+
+      .history-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .history-list {
+        display: grid;
+        gap: 10px;
+        max-height: 260px;
+        overflow: auto;
+      }
+
+      .history-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(42, 51, 49, 0.1);
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .history-card.is-active {
+        border-color: rgba(200, 93, 47, 0.35);
+        box-shadow: 0 10px 24px rgba(200, 93, 47, 0.12);
+      }
+
+      .history-card header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .history-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .history-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .history-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
       .file-toolbar {
         display: flex;
         align-items: center;
@@ -1695,6 +2036,16 @@ STUDIO_HTML = """<!doctype html>
             等待结构化输入。请加载示例规格包，或导入你自己的文件开始运行。
           </div>
 
+          <section class="history-section">
+            <div class="history-header">
+              <strong>历史运行</strong>
+              <button class="button-secondary" id="refresh-history" type="button">刷新列表</button>
+            </div>
+            <div id="history-list" class="history-list">
+              <p class="panel-copy muted">当前还没有历史运行。</p>
+            </div>
+          </section>
+
           <div class="bundle-grid">
             <article class="bundle-card">
               <header>
@@ -1768,8 +2119,10 @@ STUDIO_HTML = """<!doctype html>
       const loadPresetButton = document.getElementById("load-preset");
       const clearEditorsButton = document.getElementById("clear-editors");
       const startRunButton = document.getElementById("start-run");
+      const refreshHistoryButton = document.getElementById("refresh-history");
       const fileLoader = document.getElementById("file-loader");
       const statusStrip = document.getElementById("status-strip");
+      const historyList = document.getElementById("history-list");
       const eventFeed = document.getElementById("event-feed");
       const metricGrid = document.getElementById("metric-grid");
       const agentList = document.getElementById("agent-list");
@@ -2098,6 +2451,75 @@ STUDIO_HTML = """<!doctype html>
         }).join("");
         if (presets.length) {
           await loadPreset(presets[0].name);
+        }
+      }
+
+      function renderRunHistory(runs) {
+        if (!runs.length) {
+          historyList.innerHTML = `<p class="panel-copy muted">当前还没有历史运行。</p>`;
+          return;
+        }
+        historyList.innerHTML = runs.map((run) => `
+          <article class="history-card ${run.run_id === currentRunId ? "is-active" : ""}">
+            <header>
+              <strong>${escapeHtml(run.bundle?.service_name || run.run_id)}</strong>
+              <div class="history-meta">
+                <span class="tag">${escapeHtml(formatStatusLabel(run.status))}</span>
+                <span class="tag">${escapeHtml(formatStateLabel(run.current_state || "intake"))}</span>
+              </div>
+            </header>
+            <p>${escapeHtml(run.bundle?.summary || run.requirement || "暂无说明。")}</p>
+            <div class="history-meta">
+              <span class="tag">${escapeHtml(new Date(run.updated_at).toLocaleString())}</span>
+              <span class="tag">${escapeHtml(String(run.file_count || 0))} 个文件</span>
+              ${run.resume_supported ? `<span class="tag">可续跑: ${escapeHtml(formatStateLabel(run.resume_from_state || ""))}</span>` : ""}
+            </div>
+            <div class="history-actions">
+              <button class="button-secondary" type="button" data-history-open="${escapeHtml(run.run_id)}">查看</button>
+              ${run.resume_supported ? `<button class="button-primary" type="button" data-history-resume="${escapeHtml(run.run_id)}">继续运行</button>` : ""}
+            </div>
+          </article>
+        `).join("");
+
+        Array.from(historyList.querySelectorAll("[data-history-open]")).forEach((button) => {
+          button.addEventListener("click", async () => {
+            await openRun(button.dataset.historyOpen);
+          });
+        });
+        Array.from(historyList.querySelectorAll("[data-history-resume]")).forEach((button) => {
+          button.addEventListener("click", async () => {
+            await resumeRun(button.dataset.historyResume);
+          });
+        });
+      }
+
+      async function loadRunHistory() {
+        const payload = await fetchJson("/api/studio/runs");
+        renderRunHistory(payload.runs || []);
+      }
+
+      async function openRun(runId) {
+        stopPolling();
+        currentRunId = runId;
+        selectedFilePath = null;
+        const snapshot = await fetchJson(`/api/studio/runs/${runId}`);
+        await renderSnapshot(snapshot);
+        if (!TERMINAL_RUN_STATES.has(snapshot.status)) {
+          pollHandle = setTimeout(pollRun, 700);
+        }
+      }
+
+      async function resumeRun(runId) {
+        stopPolling();
+        setStatus("正在准备从失败点继续运行。", "running");
+        const snapshot = await fetchJson(`/api/studio/runs/${runId}/resume`, {
+          method: "POST",
+        });
+        currentRunId = snapshot.run_id;
+        selectedFilePath = null;
+        await renderSnapshot(snapshot);
+        if (!TERMINAL_RUN_STATES.has(snapshot.status)) {
+          pollHandle = setTimeout(pollRun, 700);
         }
       }
 
@@ -2707,6 +3129,7 @@ STUDIO_HTML = """<!doctype html>
         renderEvents(snapshot);
         renderLogs(snapshot);
         await renderFiles(snapshot);
+        await loadRunHistory();
       }
 
       function stopPolling() {
@@ -2797,6 +3220,11 @@ STUDIO_HTML = """<!doctype html>
       });
 
       startRunButton.addEventListener("click", startRun);
+      refreshHistoryButton.addEventListener("click", () => {
+        loadRunHistory().catch((error) => {
+          setStatus(error.message, "failed");
+        });
+      });
 
       fileLoader.addEventListener("change", async (event) => {
         await importFiles(event.target.files);
@@ -2807,6 +3235,9 @@ STUDIO_HTML = """<!doctype html>
       renderWorkbenchTabs();
       renderDrawers();
       renderStateRail("intake", null);
+      loadRunHistory().catch((error) => {
+        setStatus(error.message, "failed");
+      });
       loadPresets().catch((error) => {
         setStatus(error.message, "failed");
       });

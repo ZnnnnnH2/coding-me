@@ -18,8 +18,7 @@ class QAAgent(BaseAgent):
         resolved_tests = tests or []
         test_path = resolved_tests[0].path if resolved_tests else plan.test_module_path
         api_route = self._api_route(context)
-        test_source = self._default_test_source(context)
-        artifacts: dict[str, object] = {"test_file": test_path, "generation_mode": "template"}
+        artifacts: dict[str, object] = {"test_file": test_path}
         bundle, llm_artifacts = self._llm_structured_files(
             context,
             system_prompt=(
@@ -60,13 +59,28 @@ class QAAgent(BaseAgent):
             ),
         )
         artifacts.update(llm_artifacts)
-        if bundle is not None:
-            llm_source = self._file_content(bundle, test_path)
-            if llm_source is not None:
-                test_source = llm_source
-            artifacts["tests"] = bundle.collections["tests"] or self._infer_test_names(llm_source or "")
-            artifacts["risks"] = bundle.collections["risks"]
-            artifacts["generation_mode"] = "llm"
+        if bundle is None:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="test module",
+                    metadata=llm_artifacts,
+                )
+            )
+
+        llm_source = self._file_content(bundle, test_path)
+        if llm_source is None:
+            raise RuntimeError(
+                self._llm_generation_failure_message(
+                    output_kind="test module",
+                    metadata={
+                        **llm_artifacts,
+                        "llm_error": f"Missing generated file content for {test_path}",
+                    },
+                )
+            )
+        artifacts["tests"] = bundle.collections["tests"] or self._infer_test_names(llm_source)
+        artifacts["risks"] = bundle.collections["risks"]
+        artifacts["generation_mode"] = "llm"
 
         return AgentResult(
             role=self.role,
@@ -75,7 +89,7 @@ class QAAgent(BaseAgent):
             tests=resolved_tests,
             file_plan=FilePatchPlan(
                 name="qa_red_tests",
-                patches=[FilePatch(path=test_path, content=test_source)],
+                patches=[FilePatch(path=test_path, content=llm_source)],
             ),
         )
 

@@ -2,12 +2,13 @@
 
 ## Demo Cases
 
-The repository currently ships two backend-oriented cases:
+The repository currently ships three backend-oriented cases with increasing business complexity:
 
-- `task_service`
-- `order_service`
+- `warehouse_dispatch` for simple read-model demos
+- `task_service` for medium single-entity workflow demos
+- `return_request_service` for hard multi-step workflow demos
 
-These are intentionally small. The goal is to measure reliability on explicit module tasks before expanding the scope.
+These are intentionally staged so the project can be evaluated on progressively richer explicit module tasks rather than jumping directly into the hardest case.
 
 ## Metrics
 

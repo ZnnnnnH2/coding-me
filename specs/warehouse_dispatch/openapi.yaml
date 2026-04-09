@@ -1,9 +1,139 @@
 openapi: 3.1.0
 info:
   title: Warehouse Dispatch Queue API
-  version: 0.1.0
-  description: List warehouse dispatch tasks with visible completion state for shift handoff.
+  version: 1.0.0
+  description: Read-only queue API for warehouse dispatch coordinators during shift handoff.
+tags:
+  - name: Dispatch Queue
+    description: Read models for outbound warehouse work.
 paths:
   /api/warehouse-dispatch-tasks:
     get:
+      tags:
+        - Dispatch Queue
       summary: List warehouse dispatch tasks
+      description: Returns the current outbound dispatch queue together with summary counts for handoff review.
+      operationId: listWarehouseDispatchTasks
+      responses:
+        "200":
+          description: Queue returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WarehouseDispatchTaskListResponse"
+              examples:
+                default:
+                  value:
+                    warehouse_dispatch_tasks:
+                      - id: 101
+                        dispatch_reference: WD-2026-001
+                        title: Load Shenzhen electronics pallet
+                        dock_code: D-03
+                        priority: urgent
+                        scheduled_departure_at: "2026-04-09T09:30:00Z"
+                        completed: false
+                        completed_at: null
+                        updated_at: "2026-04-09T08:45:00Z"
+                      - id: 102
+                        dispatch_reference: WD-2026-002
+                        title: Seal outbound carton batch
+                        dock_code: D-01
+                        priority: normal
+                        scheduled_departure_at: "2026-04-09T10:00:00Z"
+                        completed: true
+                        completed_at: "2026-04-09T08:40:00Z"
+                        updated_at: "2026-04-09T08:40:00Z"
+                    summary:
+                      total: 2
+                      open: 1
+                      completed: 1
+        "503":
+          description: Queue temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    WarehouseDispatchTask:
+      type: object
+      required:
+        - id
+        - dispatch_reference
+        - title
+        - dock_code
+        - priority
+        - scheduled_departure_at
+        - completed
+        - updated_at
+      properties:
+        id:
+          type: integer
+          example: 101
+        dispatch_reference:
+          type: string
+          example: WD-2026-001
+        title:
+          type: string
+          example: Load Shenzhen electronics pallet
+        dock_code:
+          type: string
+          example: D-03
+        priority:
+          type: string
+          enum:
+            - normal
+            - urgent
+        scheduled_departure_at:
+          type: string
+          format: date-time
+        completed:
+          type: boolean
+        completed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WarehouseDispatchQueueSummary:
+      type: object
+      required:
+        - total
+        - open
+        - completed
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        open:
+          type: integer
+          minimum: 0
+        completed:
+          type: integer
+          minimum: 0
+    WarehouseDispatchTaskListResponse:
+      type: object
+      required:
+        - warehouse_dispatch_tasks
+        - summary
+      properties:
+        warehouse_dispatch_tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/WarehouseDispatchTask"
+        summary:
+          $ref: "#/components/schemas/WarehouseDispatchQueueSummary"
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: string
+          example: queue_unavailable
+        message:
+          type: string
+          example: Warehouse dispatch queue is temporarily unavailable.
